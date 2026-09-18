@@ -1,0 +1,39 @@
+[gd_scene format=3 uid="uid://bk1fr6sfwcafo"]
+
+[ext_resource type="PackedScene" path="res://scenes/objects/platform/platform.tscn" id="1"]
+
+[node name="InitialRoom" type="Node2D" unique_id=29936082]
+
+[node name="Floor" parent="." unique_id=1500851709 instance=ExtResource("1")]
+size = Vector2(640, 32)
+color = Color(0.28, 0.31, 0.38, 1)
+
+[node name="LeftWall" parent="." unique_id=1082333188 instance=ExtResource("1")]
+position = Vector2(-32, -256)
+size = Vector2(32, 256)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="Ceiling" parent="." unique_id=1445087669 instance=ExtResource("1")]
+position = Vector2(0, -256)
+size = Vector2(480, 32)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="Step3" parent="." unique_id=1181781609 instance=ExtResource("1")]
+position = Vector2(512, -96)
+size = Vector2(32, 32)
+color = Color(0.38, 0.34, 0.28, 1)
+
+[node name="LintelSlab" parent="." unique_id=1730013512 instance=ExtResource("1")]
+position = Vector2(544, -128)
+size = Vector2(224, 32)
+color = Color(0.38, 0.34, 0.28, 1)
+
+[node name="PorchFloor" parent="." unique_id=255751946 instance=ExtResource("1")]
+position = Vector2(640, 0)
+size = Vector2(96, 32)
+color = Color(0.28, 0.31, 0.38, 1)
+
+[node name="PorchEndWall" parent="." unique_id=1997062051 instance=ExtResource("1")]
+position = Vector2(736, -96)
+size = Vector2(32, 96)
+color = Color(0.24, 0.26, 0.32, 1)

@@ -1,0 +1,67 @@
+{
+ "crouch": {
+  "fps": 6.0,
+  "frames": 4,
+  "loop": true
+ },
+ "crouch_in": {
+  "fps": 16.0,
+  "frames": 3,
+  "loop": false
+ },
+ "crouch_out": {
+  "fps": 16.0,
+  "frames": 2,
+  "loop": false
+ },
+ "fall": {
+  "fps": 8.0,
+  "frames": 3,
+  "loop": true
+ },
+ "idle": {
+  "fps": 6.0,
+  "frames": 8,
+  "loop": true
+ },
+ "jump": {
+  "fps": 12.0,
+  "frames": 2,
+  "loop": false
+ },
+ "land": {
+  "fps": 22.0,
+  "frames": 4,
+  "loop": false
+ },
+ "run": {
+  "fps": 14.0,
+  "frames": 6,
+  "loop": true
+ },
+ "start": {
+  "fps": 16.0,
+  "frames": 3,
+  "loop": false
+ },
+ "stop": {
+  "fps": 16.0,
+  "frames": 3,
+  "loop": false
+ },
+ "wall_press": {
+  "fps": 6.0,
+  "frames": 2,
+  "loop": true
+ },
+ "wall_press_in": {
+  "fps": 18.0,
+  "frames": 2,
+  "loop": false
+ },
+ "wall_press_out": {
+  "fps": 16.0,
+  "frames": 2,
+  "loop": false
+ }
+}

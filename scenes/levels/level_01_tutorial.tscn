@@ -1,0 +1,62 @@
+[gd_scene format=3 uid="uid://c6x0vm7dhemon"]
+
+[ext_resource type="Script" uid="uid://b8v6soxvu1b87" path="res://scenes/levels/level_01_tutorial.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/levels/rooms/initial_room.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/levels/rooms/teaching_corridor.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/actors/player/player.tscn" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/objects/button_plate/button_plate.tscn" id="5"]
+[ext_resource type="PackedScene" path="res://scenes/objects/door/door.tscn" id="6"]
+[ext_resource type="PackedScene" path="res://scenes/objects/ability_altar/ability_altar.tscn" id="7"]
+[ext_resource type="PackedScene" path="res://scenes/objects/pendulum/pendulum.tscn" id="8"]
+[ext_resource type="PackedScene" path="res://scenes/objects/moving_block/moving_block.tscn" id="9"]
+[ext_resource type="PackedScene" path="res://scenes/objects/sensor_zone/sensor_zone.tscn" id="10"]
+
+[node name="Level01Tutorial" type="Node2D" unique_id=661599018]
+script = ExtResource("1")
+start_with_ability = false
+camera_limits = Rect2(-96, -416, 2080, 512)
+
+[node name="InitialRoom" parent="." unique_id=513234082 instance=ExtResource("2")]
+
+[node name="TeachingCorridor" parent="." unique_id=548213015 instance=ExtResource("3")]
+
+[node name="Objects" type="Node2D" parent="." unique_id=430380620]
+
+[node name="ButtonPlate" parent="Objects" unique_id=673319088 instance=ExtResource("5")]
+position = Vector2(192, 0)
+
+[node name="Door" parent="Objects" unique_id=1052934940 instance=ExtResource("6")]
+position = Vector2(624, 0)
+trigger = NodePath("../ButtonPlate")
+
+[node name="PendulumA" parent="Objects" unique_id=1191181078 instance=ExtResource("8")]
+position = Vector2(896, -256)
+
+[node name="PendulumB" parent="Objects" unique_id=193499967 instance=ExtResource("8")]
+position = Vector2(1248, -256)
+phase = 0.5
+
+[node name="MovingBlock" parent="Objects" unique_id=603467785 instance=ExtResource("9")]
+position = Vector2(1376, -208)
+motion_mode = 1
+travel_offset = Vector2(0, -72)
+
+[node name="AbilityAltar" parent="Objects" unique_id=118273361 instance=ExtResource("7")]
+position = Vector2(1808, -128)
+
+[node name="Triggers" type="Node2D" parent="." unique_id=2093995299]
+
+[node name="GoalZone" parent="Triggers" unique_id=171927255 instance=ExtResource("10")]
+position = Vector2(688, 0)
+
+[node name="BypassZone" parent="Triggers" unique_id=2022153964 instance=ExtResource("10")]
+position = Vector2(704, -144)
+width = 128.0
+height = 96.0
+band_centre_y = 0.0
+
+[node name="Player" parent="." unique_id=1249257711 instance=ExtResource("4")]
+position = Vector2(64, -15)
+
+[node name="PlayerSpawn" type="Marker2D" parent="." unique_id=1313543010]
+position = Vector2(64, -15)

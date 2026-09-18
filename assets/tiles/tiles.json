@@ -1,0 +1,185 @@
+{
+  "tile": 16,
+  "style": "ab",
+  "terrain": {
+    "file": "tilesheet_terrain.png",
+    "size": [
+      64,
+      64
+    ],
+    "mask_bits": {
+      "up": 1,
+      "right": 2,
+      "down": 4,
+      "left": 8
+    },
+    "note": "mask bit set = that side has a solid neighbour, so no cap/face is drawn there",
+    "tiles": [
+      {
+        "mask": 0,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "mask": 1,
+        "x": 16,
+        "y": 0
+      },
+      {
+        "mask": 2,
+        "x": 32,
+        "y": 0
+      },
+      {
+        "mask": 3,
+        "x": 48,
+        "y": 0
+      },
+      {
+        "mask": 4,
+        "x": 0,
+        "y": 16
+      },
+      {
+        "mask": 5,
+        "x": 16,
+        "y": 16
+      },
+      {
+        "mask": 6,
+        "x": 32,
+        "y": 16
+      },
+      {
+        "mask": 7,
+        "x": 48,
+        "y": 16
+      },
+      {
+        "mask": 8,
+        "x": 0,
+        "y": 32
+      },
+      {
+        "mask": 9,
+        "x": 16,
+        "y": 32
+      },
+      {
+        "mask": 10,
+        "x": 32,
+        "y": 32
+      },
+      {
+        "mask": 11,
+        "x": 48,
+        "y": 32
+      },
+      {
+        "mask": 12,
+        "x": 0,
+        "y": 48
+      },
+      {
+        "mask": 13,
+        "x": 16,
+        "y": 48
+      },
+      {
+        "mask": 14,
+        "x": 32,
+        "y": 48
+      },
+      {
+        "mask": 15,
+        "x": 48,
+        "y": 48
+      }
+    ]
+  },
+  "decor": {
+    "file": "tilesheet_decor.png",
+    "size": [
+      256,
+      256
+    ],
+    "items": {
+      "wall_fill": [
+        0,
+        0,
+        16,
+        16
+      ],
+      "shade": [
+        16,
+        0,
+        16,
+        16
+      ],
+      "window": [
+        32,
+        0,
+        96,
+        64
+      ],
+      "monitor": [
+        128,
+        0,
+        48,
+        32
+      ],
+      "led_panel": [
+        176,
+        0,
+        32,
+        32
+      ],
+      "vent": [
+        208,
+        0,
+        32,
+        16
+      ],
+      "cabinet": [
+        0,
+        64,
+        64,
+        48
+      ],
+      "cabinet_small": [
+        64,
+        64,
+        48,
+        32
+      ],
+      "hazard": [
+        112,
+        64,
+        32,
+        16
+      ],
+      "pipe_v": [
+        192,
+        64,
+        16,
+        96
+      ],
+      "light": [
+        0,
+        112,
+        96,
+        16
+      ],
+      "pipe_h": [
+        96,
+        112,
+        64,
+        16
+      ]
+    }
+  },
+  "layout_hint": {
+    "wall_fill": "WallFill layer, every empty cell",
+    "shade": "Decor layer, pit shaft cells"
+  }
+}

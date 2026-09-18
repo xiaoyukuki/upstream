@@ -1,0 +1,48 @@
+[gd_scene format=3 uid="uid://b2lanccuawrmy"]
+
+[ext_resource type="Script" uid="uid://vgkpoksfv7jo" path="res://scenes/levels/level_template.gd" id="1_di47f"]
+[ext_resource type="PackedScene" path="res://scenes/objects/platform/platform.tscn" id="2_ytw21"]
+[ext_resource type="PackedScene" path="res://scenes/objects/sensor_zone/sensor_zone.tscn" id="3_vx6sq"]
+[ext_resource type="PackedScene" path="res://scenes/actors/player/player.tscn" id="4_l2eqp"]
+[ext_resource type="PackedScene" path="res://scenes/objects/door/door.tscn" id="5_0li72"]
+[ext_resource type="PackedScene" path="res://scenes/objects/button_plate/button_plate.tscn" id="6_6l213"]
+
+[node name="LevelTemplate" type="Node2D" unique_id=305803044]
+script = ExtResource("1_di47f")
+camera_limits = Rect2(0, -352, 1280, 480)
+
+[node name="Terrain" type="Node2D" parent="." unique_id=762913017]
+
+[node name="Floor" parent="Terrain" unique_id=395658794 instance=ExtResource("2_ytw21")]
+size = Vector2(1280, 32)
+
+[node name="LeftWall" parent="Terrain" unique_id=1325351223 instance=ExtResource("2_ytw21")]
+position = Vector2(-32, -352)
+size = Vector2(32, 352)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="RightWall" parent="Terrain" unique_id=1753192864 instance=ExtResource("2_ytw21")]
+position = Vector2(1280, -352)
+size = Vector2(32, 352)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="Objects" type="Node2D" parent="." unique_id=419172952]
+
+[node name="Triggers" type="Node2D" parent="." unique_id=39419946]
+
+[node name="GoalZone" parent="Triggers" unique_id=1043843461 instance=ExtResource("3_vx6sq")]
+position = Vector2(1216, 0)
+width = 64.0
+
+[node name="Player" parent="." unique_id=1678315684 instance=ExtResource("4_l2eqp")]
+position = Vector2(64, -15)
+
+[node name="PlayerSpawn" type="Marker2D" parent="." unique_id=1350406731]
+position = Vector2(64, -15)
+
+[node name="Door" parent="." unique_id=1522552368 instance=ExtResource("5_0li72")]
+position = Vector2(233, 0)
+trigger = NodePath("../ButtonPlate")
+
+[node name="ButtonPlate" parent="." unique_id=1766655957 instance=ExtResource("6_6l213")]
+position = Vector2(127, 9)

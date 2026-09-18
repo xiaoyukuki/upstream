@@ -1,0 +1,71 @@
+[gd_scene format=3 uid="uid://do7gohrr3uwig"]
+
+[ext_resource type="Script" uid="uid://vgkpoksfv7jo" path="res://scenes/levels/level_template.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/objects/platform/platform.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/actors/player/player.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/objects/sensor_zone/sensor_zone.tscn" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/objects/ability_altar/ability_altar.tscn" id="5_ulyey"]
+[ext_resource type="PackedScene" path="res://scenes/objects/button_plate/button_plate.tscn" id="6_j81xe"]
+[ext_resource type="PackedScene" path="res://scenes/objects/door/door.tscn" id="7_qvykx"]
+[ext_resource type="TileSet" path="res://assets/tiles/lab_tileset.tres" id="8_tiles"]
+
+[node name="LevelTemplate" type="Node2D" unique_id=2142175897]
+script = ExtResource("1")
+camera_limits = Rect2(0, -352, 1280, 480)
+
+[node name="Terrain" type="Node2D" parent="." unique_id=216216821]
+
+[node name="Floor2" parent="Terrain" unique_id=1853007414 instance=ExtResource("2")]
+position = Vector2(1, -126)
+size = Vector2(1280, 32)
+
+[node name="Floor" parent="Terrain" unique_id=366903165 instance=ExtResource("2")]
+size = Vector2(1280, 32)
+
+[node name="LeftWall" parent="Terrain" unique_id=281832486 instance=ExtResource("2")]
+position = Vector2(-32, -352)
+size = Vector2(32, 352)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="RightWall" parent="Terrain" unique_id=1420931865 instance=ExtResource("2")]
+position = Vector2(1280, -352)
+size = Vector2(32, 352)
+color = Color(0.24, 0.26, 0.32, 1)
+
+[node name="WallFill" type="TileMapLayer" parent="Terrain" unique_id=309071040]
+z_index = -30
+tile_map_data = PackedByteArray(0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0)
+tile_set = ExtResource("8_tiles")
+collision_enabled = false
+
+[node name="Decor" type="TileMapLayer" parent="Terrain" unique_id=1786248990]
+z_index = -20
+tile_set = ExtResource("8_tiles")
+collision_enabled = false
+
+[node name="Tiles" type="TileMapLayer" parent="Terrain" unique_id=565967967]
+tile_set = ExtResource("8_tiles")
+
+[node name="Triggers" type="Node2D" parent="." unique_id=2096876655]
+
+[node name="GoalZone" parent="Triggers" unique_id=295955312 instance=ExtResource("4")]
+position = Vector2(1216, 0)
+width = 64.0
+
+[node name="Player" parent="." unique_id=1096430809 instance=ExtResource("3")]
+position = Vector2(64, -15)
+
+[node name="PlayerSpawn" type="Marker2D" parent="." unique_id=788791694]
+position = Vector2(64, -15)
+
+[node name="Objects" type="Node2D" parent="." unique_id=369208132]
+
+[node name="Door" parent="Objects" unique_id=1234043766 instance=ExtResource("7_qvykx")]
+position = Vector2(314, 2)
+trigger = NodePath("../ButtonPlate")
+
+[node name="ButtonPlate" parent="Objects" unique_id=1018776279 instance=ExtResource("6_j81xe")]
+position = Vector2(135, 7)
+
+[node name="AbilityAltar" parent="Objects" unique_id=590068764 instance=ExtResource("5_ulyey")]
+position = Vector2(-1094, 317)
