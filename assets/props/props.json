@@ -1,0 +1,107 @@
+{
+  "style": "ab",
+  "door_body": "deep",
+  "button_face": "accent2",
+  "led_socket": [
+    21,
+    30,
+    37
+  ],
+  "led_lit": [
+    158,
+    209,
+    227
+  ],
+  "button_socket": [
+    26,
+    38,
+    46
+  ],
+  "end_shade": [
+    67,
+    75,
+    86
+  ],
+  "m5_style": "g",
+  "gate_led_locked": [
+    250,
+    190,
+    74
+  ],
+  "gate_led_lit": [
+    182,
+    242,
+    248
+  ],
+  "gate_curtain": [
+    110,
+    230,
+    240
+  ],
+  "parts": {
+    "door_slat": [
+      16,
+      8
+    ],
+    "door_bottom": [
+      16,
+      8
+    ],
+    "door_jamb": [
+      4,
+      16
+    ],
+    "door_header": [
+      16,
+      12
+    ],
+    "door_header_cap_l": [
+      4,
+      12
+    ],
+    "door_header_cap_r": [
+      4,
+      12
+    ],
+    "button_top": [
+      16,
+      8
+    ],
+    "button_base": [
+      16,
+      8
+    ],
+    "spike_unit": [
+      16,
+      16
+    ],
+    "bar_pole_l": [
+      10,
+      18
+    ],
+    "bar_pole_r": [
+      10,
+      18
+    ],
+    "bar_live": [
+      16,
+      18
+    ],
+    "bar_off": [
+      16,
+      18
+    ],
+    "key_card": [
+      14,
+      10
+    ],
+    "terminal_idle": [
+      32,
+      12
+    ],
+    "terminal_saved": [
+      32,
+      12
+    ]
+  }
+}

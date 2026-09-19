@@ -22,6 +22,11 @@ extends StaticBody2D
 ## 旧版那一下横弹是玩家下一帧 `move_and_slide()` 发现自己陷进门板后的脱困副产物。
 ## 夹的仍然只是 `_progress`，所以"碰撞体 == 画出来的门扇"与纯函数位置模型都不破。
 ##
+## 立绘（D25）= 无缝平铺零件（`assets/props/`，`tools/gen_props.py --emit` 落盘）：
+## 门柱 4x16、门楣 16x12 + 4x12 端帽、卷帘板 16x8、底边警示条 16x8，`_draw()` 按当前开度平铺。
+## 调色板固定为 AB 实验室一套（深钢 + 琥珀警示 + 青状态灯），不再提供逐实例调色 ——
+## 明度对比是和白墙/钢地量出来的契约，任改一个色就可能让门融进背景。
+##
 ## @tool：检查器里改 height/width 立刻反映到门扇与碰撞体，摆门不用先运行游戏。
 
 signal open_changed(is_open: bool)
@@ -53,11 +58,6 @@ signal open_changed(is_open: bool)
 		trigger = value
 		_reconnect_trigger()
 
-@export var panel_color: Color = Color(0.66, 0.42, 0.3):
-	set(value):
-		panel_color = value
-		_apply(_progress)
-
 var is_open: bool = false
 ## 关门时撞上了玩家头顶、正停在他的头骨上。给日志与自测读，不参与任何判定。
 var is_blocked: bool = false
@@ -85,10 +85,21 @@ const MAX_SQUEEZE_HITS: int = 8
 const HOLD_MARGIN: float = 0.5
 ## 停在头顶时留的手动余量，见 `_clamp_squeeze`。
 const CONTACT_SLACK: float = 0.1
+## 立绘零件（D25）：tools/gen_props.py --emit 落盘，尺寸清单在 assets/props/props.json。
+## 门扇可见高度逐帧在变，整张纹理要么拉伸要么写死尺寸，所以立绘只能是无缝平铺的小零件。
+const TEX_SLAT: Texture2D = preload("res://assets/props/door_slat.png")
+const TEX_BOTTOM: Texture2D = preload("res://assets/props/door_bottom.png")
+const TEX_JAMB: Texture2D = preload("res://assets/props/door_jamb.png")
+const TEX_HEADER: Texture2D = preload("res://assets/props/door_header.png")
+const TEX_HEADER_L: Texture2D = preload("res://assets/props/door_header_cap_l.png")
+const TEX_HEADER_R: Texture2D = preload("res://assets/props/door_header_cap_r.png")
+## 状态灯靠明度编码（亮/灭差在明度不只是色相），M3 去饱和后仍读得出「开着」。
+## 数值与 props.json 的 led_socket / led_lit 同源，verify_kit 会比对两边。
+const LED_SOCKET: Color = Color8(21, 30, 37)
+const LED_LIT: Color = Color8(158, 209, 227)
 
 @onready var _receiver: TimeReceiver = $TimeReceiver
 @onready var _collision: CollisionShape2D = $CollisionShape2D
-@onready var _visual: Polygon2D = $Visual
 
 
 func _ready() -> void:
@@ -181,6 +192,7 @@ func set_open(value: bool) -> void:
 	is_open = value
 	_direction = 1 if value else -1
 	open_changed.emit(value)
+	queue_redraw()
 
 
 ## 换触发源必须先解掉旧连接：在检查器里改一次属性就重连一次，
@@ -224,8 +236,9 @@ func _poll_link_line() -> void:
 		queue_redraw()
 
 
-## 辅助线只给摆图的人看，运行时不该出现在画面里 —— 与触发带同一原则。
+## 立绘任何进程都画；触发源辅助线只给摆图的人看，运行时不该出现在画面里 —— 与触发带同一原则。
 func _draw() -> void:
+	_draw_shutter()
 	if not Engine.is_editor_hint():
 		return
 	var source: Node = _trigger_source()
@@ -235,6 +248,52 @@ func _draw() -> void:
 	_link_end = point
 	draw_line(Vector2.ZERO, point, LINK_COLOR, 2.0)
 	draw_circle(point, 5.0, LINK_COLOR)
+
+
+## 门柱 / 门楣 / 卷帘 / 警示底边都按当前尺寸平铺零件，右缘底缘裁余料，
+## 所以 width / height 填任意值都对得齐（导出项不保证是 16 的倍数）。
+## 冻结时 _physics_process 不调 _apply，开度停在当前值，画出来的也就是当前值，没有中间态。
+func _draw_shutter() -> void:
+	var x0: float = -width * 0.5
+	var top: float = -height
+	_tile(TEX_JAMB, x0 - 4.0, top - 12.0, 4.0, height + 12.0)
+	_tile(TEX_JAMB, x0 + width, top - 12.0, 4.0, height + 12.0)
+	draw_texture_rect_region(TEX_HEADER_L, Rect2(x0 - 4.0, top - 12.0, 4.0, 12.0), Rect2(0.0, 0.0, 4.0, 12.0))
+	_tile(TEX_HEADER, x0, top - 12.0, width, 12.0)
+	draw_texture_rect_region(TEX_HEADER_R, Rect2(x0 + width, top - 12.0, 4.0, 12.0), Rect2(0.0, 0.0, 4.0, 12.0))
+	draw_rect(Rect2(-2.0, top - 8.0, 4.0, 4.0), LED_SOCKET)
+	if is_open:
+		draw_rect(Rect2(-1.0, top - 7.0, 2.0, 2.0), LED_LIT)
+	# 向整像素行对齐只许往收的方向舍：四舍五入会把门底画得比碰撞体低半像素，
+	# 看上去就是门压进了玩家头顶（接触让位保证的是碰撞体，画面不能比它更狠）。
+	var vis: float = floorf(height * (1.0 - _progress))
+	if vis <= 0.0:
+		return
+	var band: float = minf(8.0, vis)
+	if vis - band > 0.0:
+		_tile(TEX_SLAT, x0, top, width, vis - band)
+	_tile(TEX_BOTTOM, x0, top + vis - band, width, band)
+
+
+func _tile(tex: Texture2D, x: float, y: float, w: float, h: float) -> void:
+	var cw: float = tex.get_width()
+	var ch: float = tex.get_height()
+	var cx: float = x
+	while cx < x + w - 0.001:
+		var tw: float = minf(cw, x + w - cx)
+		var cy: float = y
+		while cy < y + h - 0.001:
+			var th: float = minf(ch, y + h - cy)
+			draw_texture_rect_region(tex, Rect2(cx, cy, tw, th), Rect2(0.0, 0.0, tw, th))
+			cy += th
+		cx += tw
+
+
+## 本帧画出来的门扇本地矩形。和碰撞体是同一套算术；守门拿它比对碰撞体，
+## 将来谁只改一边，这条会当场响。
+func shutter_rect() -> Rect2:
+	var vis: float = floorf(height * (1.0 - _progress))
+	return Rect2(-width * 0.5, -height, width, vis)
 
 
 ## 冻结时不调用，因此停在当前开度；开度到几就画几，没有中间态。
@@ -248,13 +307,4 @@ func _apply(progress: float) -> void:
 	var shape_position := Vector2(0.0, -height + h * 0.5)
 	if _collision.position != shape_position:
 		_collision.position = shape_position
-	var polygon := PackedVector2Array([
-		Vector2(-width * 0.5, -height),
-		Vector2(width * 0.5, -height),
-		Vector2(width * 0.5, -height + h),
-		Vector2(-width * 0.5, -height + h),
-	])
-	if _visual.polygon != polygon:
-		_visual.polygon = polygon
-	if _visual.color != panel_color:
-		_visual.color = panel_color
+	queue_redraw()

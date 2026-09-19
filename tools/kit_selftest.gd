@@ -53,9 +53,9 @@ func _ready() -> void:
 	var door_collision = door.get_node("CollisionShape2D")
 	var rect := door_collision.shape as RectangleShape2D
 	_check("全开时碰撞体收零", rect.size.y < 0.01)
-	var panel_visual = door.get_node("Visual")
-	var panel: PackedVector2Array = panel_visual.polygon
-	_check("门扇与碰撞体同高（画出来的是同一截）", absf(panel[2].y - panel[0].y) < 0.01)
+	var sr: Rect2 = door.shutter_rect()
+	_check("画出来的门扇与碰撞体同宽同高（同一截）",
+		absf(sr.size.y - rect.size.y) < 0.01 and absf(sr.size.x - rect.size.x) < 0.01)
 
 	block.elapsed_path_time = 0.0
 	block.global_position = BLOCK_ANCHOR
@@ -154,8 +154,10 @@ func _ready() -> void:
 	_check("挡住时挂着 is_blocked", squeezer.is_blocked)
 	_check("玩家没有被挤开", absf(hero.global_position.x - squeeze_x) < 0.05)
 	_check("玩家也没有被顶离地面", absf(hero.global_position.y + Player.COLLISION_HALF_HEIGHT) < 0.05)
-	var vis: PackedVector2Array = (squeezer.get_node("Visual") as Polygon2D).polygon
-	_check("压住时门扇底边仍等于碰撞体底边", absf(vis[3].y - _panel_bottom_local(squeezer)) < 0.01)
+	var sr2: Rect2 = squeezer.shutter_rect()
+	var bottom_gap: float = _panel_bottom_local(squeezer) - (sr2.position.y + sr2.size.y)
+	_check("压住时画出来的门底不低于碰撞体底、至多差一行像素（差 %.2f）" % bottom_gap,
+		bottom_gap >= -0.001 and bottom_gap < 1.0)
 
 	var held: float = squeezer._progress
 	await _frame(30)

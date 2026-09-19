@@ -1,0 +1,1003 @@
+"""门 / 按钮 / M5 构件（尖刺、电棒、钥匙、存档点）的立绘零件 —— 选型出图，定稿后 `--emit` 落资产。
+
+用法：py tools/gen_props.py            只出选型图 assets/props/preview_props.png
+      py tools/gen_props.py --emit     落 16 张零件 PNG + assets/props/props.json
+                                       （门/按钮 8 张走 ab，M5 的尖刺/电棒/钥匙/终端 8 张走实装风格 g；
+                                        构件 preload 的就是这些文件，改名要一起改）
+      py tools/gen_props.py --m5       出 M5（危险物 / 钥匙 / 存档点）选型图
+                                       assets/props/preview_m5.png。底图走**实装风格 g**。
+                                       定稿的那几件已由 --emit 落盘（见 make_m5_parts）。
+      py tools/gen_props.py --m5final  出 M5 定稿图 assets/props/preview_m5_shipped.png
+      py tools/gen_props.py --m5door   出 D36 刷卡门对照图（卷帘 vs 光幕）
+                                       assets/props/preview_keydoor.png
+
+为什么立绘是「小零件 + 代码平铺」而不是一整张图：
+  门扇的可见高度 = height * (1 - 开度)，逐帧在变；width / height / 按钮 width 都是导出项，
+  摆图的人会改。整张纹理要么拉伸变形要么尺寸写死，都不行。所以立绘拆成能无缝平铺的
+  小零件（卷帘板 16x8、底边警示条 16x8、门柱 4x16、门楣 16x12、按钮面/座 16x8、端帽 4x12），
+  构件里用 _draw() 按当前尺寸平铺 —— 和瓦片同一套「零件必须自洽于 16px 周期」的规矩。
+
+选型两组候选，用户已定 **M2 深钢卷帘 + B1 琥珀面板**（门楣青状态灯亮=开、按钮踩下时面板
+沉进凹槽、前唇青灯亮）：明度上和白墙、钢地都拉开（M3 去饱和后靠明度仍然读得出来），
+琥珀归「机器/危险」一家、青归「灯/玻璃」一家，和 D24 的点缀色分工一致。
+
+**调色板钉在 `G.STYLES["ab"]`，而地图在 D26 之后实装的是暗底 `g`。** 这是知道的偏差、不是漏改：
+门板对暗墙 1.39、按钮钢座 1.19，数字给过用户，判定「画风已融合，不用修改」。要换皮改
+`STYLES["ab"]` 那两处即可，但 props.json 里 `door_body` / `button_face` 是**指向调色板的别名**
+（字符串），另外四个灯色才是落盘的字面色 —— 拿别名当 RGB 三元组会 TypeError。
+改完跑 `verify_kit`，它比对 json 与构件常量的同源关系。
+"""
+
+import math
+import os
+from PIL import Image, ImageDraw, ImageFont
+
+import gen_tiles as G
+
+TILE = G.TILE
+ZOOM = 2
+
+# 候选用的主体色（都取自 AB 调色板，不新发明颜色）
+DOOR_BODIES = {
+    "M1": None,   # 占位，main 里填 p["surface"]
+    "M2": None,   # 填 p["deep"]
+}
+
+
+def _font(size):
+    return G._font(size)
+
+
+# ---------------------------------------------------------------- 零件画法
+# 每个零件都画在「自己的周期」里：横向零件的图案周期整除 16，纵向的整除 16，
+# 平铺时缝、铆钉、斜条都对得上。
+
+def part_door_slat(p, body):
+    img = Image.new("RGBA", (16, 8), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 15, 7], fill=body)
+    d.rectangle([0, 0, 15, 0], fill=G.lighter(body, 0.20))
+    d.rectangle([0, 1, 15, 1], fill=G.lighter(body, 0.07))
+    d.rectangle([0, 3, 15, 3], fill=G.darker(body, 0.04))
+    d.rectangle([0, 6, 15, 6], fill=G.darker(body, 0.22))
+    d.rectangle([0, 7, 15, 7], fill=G.darker(body, 0.42))
+    for rx in (2, 13):                                  # 铆钉：周期 16，平铺不跳
+        d.rectangle([rx, 4, rx, 4], fill=G.darker(body, 0.38))
+        d.rectangle([rx, 5, rx, 5], fill=G.lighter(body, 0.30))
+    return img
+
+
+def part_door_bottom(p):
+    img = Image.new("RGBA", (16, 8), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    a = p["accent2"]
+    d.rectangle([0, 0, 15, 7], fill=a)
+    for py in range(8):                                 # 45 度斜条，周期 8，平铺连续
+        for px in range(16):
+            if ((px + py) // 4) % 2 == 0:
+                d.rectangle([px, py, px, py], fill=G.darker(a, 0.55))
+    d.rectangle([0, 0, 15, 0], fill=G.lighter(a, 0.40))
+    d.rectangle([0, 7, 15, 7], fill=p["edge"])
+    return img
+
+
+def part_door_jamb(p, body):
+    img = Image.new("RGBA", (4, 16), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 0, 15], fill=G.darker(body, 0.38))
+    d.rectangle([1, 0, 1, 15], fill=G.lighter(body, 0.25))
+    d.rectangle([2, 0, 2, 15], fill=body)
+    d.rectangle([3, 0, 3, 15], fill=G.darker(body, 0.20))
+    d.rectangle([1, 7, 2, 8], fill=G.darker(body, 0.45))   # 螺栓：周期 16
+    return img
+
+
+def part_door_header(p, body):
+    img = Image.new("RGBA", (16, 12), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 15, 11], fill=body)
+    d.rectangle([0, 0, 15, 1], fill=G.lighter(body, 0.30))
+    d.rectangle([0, 2, 15, 2], fill=G.darker(body, 0.25))
+    for vx in (3, 10):                                  # 散热槽：周期 16 内两处
+        d.rectangle([vx, 5, vx + 1, 8], fill=G.darker(body, 0.50))
+    d.rectangle([0, 10, 15, 11], fill=G.darker(body, 0.35))
+    return img
+
+
+def part_door_header_cap(p, body, right):
+    img = Image.new("RGBA", (4, 12), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 3, 11], fill=body)
+    d.rectangle([0, 0, 3, 1], fill=G.lighter(body, 0.30))
+    col = 3 if right else 0
+    d.rectangle([col, 0, col, 11], fill=G.darker(body, 0.45))
+    d.rectangle([0, 10, 3, 11], fill=G.darker(body, 0.35))
+    return img
+
+
+def part_button_top(p, face):
+    img = Image.new("RGBA", (16, 8), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 15, 7], fill=face)
+    d.rectangle([0, 0, 15, 0], fill=G.lighter(face, 0.45))
+    d.rectangle([0, 1, 15, 2], fill=G.lighter(face, 0.14))
+    d.rectangle([0, 4, 15, 4], fill=G.darker(face, 0.07))
+    d.rectangle([0, 6, 15, 6], fill=G.darker(face, 0.28))
+    d.rectangle([0, 7, 15, 7], fill=G.darker(face, 0.48))
+    for rx in (2, 13):
+        d.rectangle([rx, 3, rx, 3], fill=G.darker(face, 0.40))
+    return img
+
+
+def part_button_base(p, body):
+    """前唇（行 0-2）+ 凹槽内壁（行 3-7）。paint_button 分两遍画：
+    凹槽在面板后、前唇在面板前，踩下时面板就「沉进」座里而不是把座盖掉。"""
+    img = Image.new("RGBA", (16, 8), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rectangle([0, 0, 15, 2], fill=body)
+    d.rectangle([0, 0, 15, 0], fill=G.lighter(body, 0.25))
+    d.rectangle([0, 2, 15, 2], fill=G.darker(body, 0.40))
+    d.rectangle([0, 3, 15, 6], fill=G.darker(body, 0.55))
+    d.rectangle([0, 7, 15, 7], fill=G.darker(body, 0.70))
+    return img
+
+
+# ---------------------------------------------------------------- 平铺小工具
+
+def tile_h(img, unit, cap_l, cap_r, x, y, w):
+    img.paste(cap_l, (x, y))
+    cx = x + cap_l.width
+    end = x + w - cap_r.width
+    while cx < end:
+        take = min(unit.width, end - cx)
+        img.paste(unit.crop((0, 0, take, unit.height)), (cx, y))
+        cx += take
+    img.paste(cap_r, (end, y))
+
+
+def tile_h_plain(img, unit, x, y, w):
+    """无端帽的横向平铺，右缘按余宽裁切。按钮这类「两端影由实例画」的零件用它。"""
+    cx = x
+    while cx < x + w:
+        take = min(unit.width, x + w - cx)
+        img.paste(unit.crop((0, 0, take, unit.height)), (cx, y))
+        cx += take
+
+
+def tile_v(img, unit, x, y, h):
+    cy = y
+    while cy + unit.height <= y + h:
+        img.paste(unit, (x, cy))
+        cy += unit.height
+    rest = y + h - cy
+    if rest > 0:
+        img.paste(unit.crop((0, 0, unit.width, rest)), (x, cy))
+
+
+def tile_h_clip(img, unit, x, y, w, h):
+    """横向平铺、纵向只露 h 像素（卷帘被门楣吃掉一截时用）。"""
+    cx = x
+    while cx < x + w:
+        cw = min(unit.width, x + w - cx)
+        cy = y
+        while cy < y + h:
+            ch = min(unit.height, y + h - cy)
+            img.paste(unit.crop((0, 0, cw, ch)), (cx, cy))
+            cy += ch
+        cx += cw
+
+
+# ---------------------------------------------------------------- 构件立绘
+
+def paint_door(img, p, parts, cx, floor_y, progress, open_led):
+    w, h = 32, 96
+    x0 = cx - w // 2
+    top = floor_y - h
+    tile_v(img, parts["jamb"], x0 - 4, top - 12, h + 12)
+    tile_v(img, parts["jamb"], x0 + w, top - 12, h + 12)
+    tile_h(img, parts["header"], parts["header_l"], parts["header_r"], x0 - 4, top - 12, w + 8)
+    d = ImageDraw.Draw(img, "RGBA")
+    led = (x0 + w // 2 - 1, top - 7)
+    d.rectangle([led[0] - 1, led[1] - 1, led[0] + 2, led[1] + 2], fill=G.darker(p["screen"], 0.2))
+    if open_led:
+        d.rectangle([led[0], led[1], led[0] + 1, led[1] + 1], fill=G.mix(p["accent"], (255, 255, 255), 0.5))
+    vis = int(round(h * (1.0 - progress)))
+    if vis <= 0:
+        return
+    if vis > 8:
+        tile_h_clip(img, parts["slat"], x0, top, w, vis - 8)
+    band = min(8, vis)
+    tile_h_clip(img, parts["bottom"], x0, top + vis - band, w, band)
+
+
+def paint_button(img, p, parts, cx, floor_y, pressed):
+    w = 64
+    x0 = cx - w // 2
+    depth = 8 if pressed else 0
+    top_y = floor_y - 16 + depth
+    tile_h_plain(img, parts["base_well"], x0, floor_y - 5, w)
+    tile_h_plain(img, parts["top"], x0, top_y, w)
+    tile_h_plain(img, parts["base_lip"], x0, floor_y - 8, w)
+    d = ImageDraw.Draw(img, "RGBA")
+    end = G.darker(p["metal"], 0.45)
+    d.rectangle([x0, top_y, x0, floor_y - 1], fill=end)
+    d.rectangle([x0 + w - 1, top_y, x0 + w - 1, floor_y - 1], fill=end)
+    d.rectangle([cx - 1, floor_y - 8, cx, floor_y - 7], fill=p["screen"])
+    if pressed:
+        d.rectangle([cx - 1, floor_y - 8, cx, floor_y - 7], fill=G.mix(p["accent"], (255, 255, 255), 0.5))
+
+
+def make_parts(p, body, face):
+    base = part_button_base(p, p["metal"])
+    return {
+        "slat": part_door_slat(p, body),
+        "bottom": part_door_bottom(p),
+        "jamb": part_door_jamb(p, body),
+        "header": part_door_header(p, body),
+        "header_l": part_door_header_cap(p, body, False),
+        "header_r": part_door_header_cap(p, body, True),
+        "top": part_button_top(p, face),
+        "base": base,
+        "base_lip": base.crop((0, 0, 16, 3)),
+        "base_well": base.crop((0, 3, 16, 8)),
+    }
+
+
+# ---------------------------------------------------------------- 预览图
+
+def context_strip(p, terrain, decor, w, h, floor_y):
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    wf = G.decor_tile(decor, "wall_fill")
+    for cy in range(0, h, TILE):
+        for cx in range(0, w, TILE):
+            img.paste(wf, (cx, cy))
+    body = terrain.crop((2 * TILE, 3 * TILE, 3 * TILE, 4 * TILE))     # mask 14：上开
+    inner = terrain.crop((3 * TILE, 3 * TILE, 4 * TILE, 4 * TILE))    # mask 15：四邻全在
+    for cx in range(0, w, TILE):
+        img.paste(body, (cx, floor_y))
+        for cy in range(floor_y + TILE, h, TILE):
+            img.paste(inner, (cx, cy))
+    return img
+
+
+def door_row(p, terrain, decor, root):
+    w, h, floor_y = 248, 140, 124
+    strips = []
+    for key, body in (("M1  mid-steel shutter", p["surface"]), ("M2  dark-steel shutter", p["deep"])):
+        img = context_strip(p, terrain, decor, w, h, floor_y)
+        parts = make_parts(p, body, p["accent2"])
+        paint_door(img, p, parts, 48, floor_y, 0.0, False)
+        paint_door(img, p, parts, 128, floor_y, 0.5, False)
+        paint_door(img, p, parts, 208, floor_y, 1.0, True)
+        G.paste_slime(img, "idle", 2, 88, floor_y, False, 1, root)
+        strips.append((img, key + "   closed / half / open (led lit = open)"))
+    return strips
+
+
+def button_row(p, terrain, decor, root):
+    w, h, floor_y = 248, 72, 56
+    strips = []
+    for key, face in (("B1  amber face", p["accent2"]), ("B2  cyan face", p["accent"])):
+        img = context_strip(p, terrain, decor, w, h, floor_y)
+        parts = make_parts(p, p["deep"], face)
+        paint_button(img, p, parts, 64, floor_y, False)
+        paint_button(img, p, parts, 176, floor_y, True)
+        G.paste_slime(img, "idle", 2, 176, floor_y - 8, False, 1, root)
+        strips.append((img, key + "   idle / pressed (slime stands on it)"))
+    return strips
+
+
+def parts_row(p):
+    parts = make_parts(p, p["deep"], p["accent2"])
+    order = ["slat", "bottom", "jamb", "header", "top", "base"]
+    sc = 6
+    pad = 12
+    widths = [parts[k].width * sc + 26 for k in order]
+    w = pad * 2 + sum(widths)
+    h = pad * 2 + 12 * sc + 16
+    img = Image.new("RGB", (w, h), (196, 203, 213))
+    d = ImageDraw.Draw(img)
+    cx = pad
+    for k in order:
+        u = parts[k]
+        up = u.resize((u.width * sc, u.height * sc), Image.NEAREST)
+        bg = Image.new("RGB", up.size)
+        bc = ImageDraw.Draw(bg)
+        for yy in range(0, up.size[1], 8):
+            for xx in range(0, up.size[0], 8):
+                bc.rectangle([xx, yy, xx + 7, yy + 7],
+                             fill=(206, 211, 218) if (xx + yy) // 8 % 2 else (238, 241, 245))
+        bg.paste(up, (0, 0), up)
+        img.paste(bg, (cx, pad))
+        d.text((cx, pad + up.size[1] + 3), "%s %dx%d" % (k, u.width, u.height),
+               fill=(24, 28, 34), font=_font(12))
+        cx += u.width * sc + 26
+    return img
+
+
+# ---------------------------------------------------------------- M5 选型（危险物 / 钥匙 / 存档点）
+# 这一节**只出图**：零件不落 PART_FILES、不走 --emit，等肉眼定完型再落盘。
+#
+# 看图前先记这条色彩分工（D29 / D30 的结论）：
+#   亮白钢 = 会咬人的固体（尖刺）    青 = 光与电（电流棒、存档点激活态）
+#   琥珀   = 可拾取物（钥匙）        钢灰 = 未激活的静物
+# 底图一律用**实装风格 g** 的真图集而不是 ab —— 新零件在夜光墙上读不出来就白画。
+# 门那件仍按 D25 的既有事实用 ab 调色板画，好让"新旧混着看"这件事在图上了结。
+
+def _rim(img, p):
+    """贴纸语言：非平铺件补一圈朝外的描边（D26 第 1 条）。"""
+    return G.add_rim(img, p["edge"]) if p.get("soft") else img
+
+
+def part_spikes(p, teeth=4, height=10):
+    """16x16 一格、周期 16 平铺连续的尖刺单元。牙尖最亮、根部收暗，牙才读得出是长在地上。"""
+    img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    step = 16 // teeth
+    top = 16 - height
+    span = max(1, step // 2 - 1)
+    for i in range(teeth):
+        ax = i * step + step // 2
+        for r in range(height):
+            y = top + r
+            hw = int(round(span * (r / max(1, height - 1))))
+            if r < 2:
+                body = G.lighter(p["lip"], 0.12)
+            elif r >= height - 3:
+                body = G.darker(p["metal"], 0.16)
+            else:
+                body = p["lip"]
+            d.rectangle([ax - hw, y, ax + hw, y], fill=body)
+            if hw > 0:                                  # 左上受光、右侧投影
+                d.rectangle([ax - hw, y, ax - hw, y], fill=G.lighter(body, 0.34))
+                d.rectangle([ax + hw, y, ax + hw, y], fill=G.darker(body, 0.30))
+    return _rim(img, p)
+
+
+def part_pole(p, right):
+    """极柱 10x18：外圈一圈 lip 亮边、里面才是钢。right = 光束在这一柱的右侧。
+
+    为什么描边是亮的：g 的 edge 比墙还暗两档，拿它描边等于不描（实测极柱对墙 2.13、
+    对地 1.25，落进暗关直接隐形）。D26 给主角解决同一个问题用的就是补亮边，这里照抄。
+    """
+    img = Image.new("RGBA", (10, 18), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 9, 17], fill=p["lip"])
+    d.rectangle([1, 1, 8, 16], fill=p["deep"])
+    d.rectangle([1, 1, 8, 1], fill=G.lighter(p["metal"], 0.10))
+    d.rectangle([1, 1, 1, 16], fill=G.lighter(p["deep"], 0.22))
+    d.rectangle([8, 1, 8, 16], fill=G.darker(p["deep"], 0.40))
+    col = 7 if right else 2
+    other = col + (1 if right else -1)
+    d.rectangle([col, 5, col, 12], fill=p["accent"])
+    d.rectangle([other, 6, other, 11], fill=G.lighter(p["accent"], 0.60))
+    d.rectangle([4, 13, 6, 14], fill=G.darker(p["deep"], 0.55))   # 检修窗，相位记号
+    return img
+
+
+def paint_beam(img, p, x0, y, w, thick, live):
+    """两极柱之间的电。通 = 描边朝外的三段弧 + 一点 alpha 光晕；断 = 只留一条虚线预告位置。
+    折线周期 16，与瓦片同一套自洽规矩；光晕走 alpha 叠而不是平涂混色（D24 第 7 条）。
+
+    断相位那条虚线用 `glass` 不用钢灰：它是**唯一的**「这里有一根棒、此刻没电」的记号，
+    暗底 g 上钢灰那档实测对墙 1.18（和 D34 记的极柱隐形同一类病），看不见就读不出时机。
+    glass 对墙 3.28 —— 够读，又比 LIVE 暗一档，两个状态不会抢注意力。
+    """
+    d = ImageDraw.Draw(img, "RGBA")
+    mid = y + thick // 2
+    if not live:
+        for xx in range(x0, x0 + w, 8):
+            d.rectangle([xx, mid, min(xx + 3, x0 + w - 1), mid], fill=p["glass"])
+        return
+    glow = p["accent"] + (70,)
+    for xx in range(x0, x0 + w):
+        oy = int(round(1.5 * math.sin((xx - x0) % 16 * math.pi / 8.0)))
+        d.rectangle([xx, mid - thick // 2 - 1 + oy, xx, mid + thick // 2 + 1 + oy], fill=glow)
+        d.rectangle([xx, mid - thick // 2 + oy, xx, mid + thick // 2 + oy], fill=p["edge"])
+        d.rectangle([xx, mid - thick // 2 + 1 + oy, xx, mid + thick // 2 - 1 + oy], fill=p["accent"])
+        d.rectangle([xx, mid + oy, xx, mid + oy], fill=G.lighter(p["accent"], 0.74))
+
+
+def bar_unit(p, length, thick, live):
+    """一根电棒的整体：左右极柱 + 中间的光束。**横着画**，竖电闸 = 同一张图转 90 度 ——
+    构件里也是这一张纹理平铺 + 实例 rotation，所以预览和引擎走的是一条合成路径。"""
+    img = Image.new("RGBA", (10 + length + 10, 18), (0, 0, 0, 0))
+    left = part_pole(p, True)
+    img.paste(left, (0, 0), left)
+    right = part_pole(p, False)
+    img.paste(right, (10 + length, 0), right)
+    paint_beam(img, p, 10, 9 - thick // 2, length, thick, live)
+    return img
+
+
+def part_key_ring(p):
+    """K1 齿钥匙 14x12：圆环 + 杆 + 两颗齿。琥珀 = 可拾取物。"""
+    img = Image.new("RGBA", (14, 12), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    a = p["accent2"]
+    d.ellipse([0, 1, 7, 8], fill=G.darker(a, 0.10))
+    d.ellipse([2, 3, 5, 6], fill=(0, 0, 0, 0))
+    d.rectangle([6, 4, 13, 6], fill=a)
+    d.rectangle([6, 4, 13, 4], fill=G.lighter(a, 0.42))
+    for tx in (10, 12):
+        d.rectangle([tx, 7, tx, 9], fill=a)
+    return _rim(img, p)
+
+
+def part_key_card(p):
+    """K2 能量卡 14x10：卡体 + 深色磁条 + 一颗青色芯片。"""
+    img = Image.new("RGBA", (14, 10), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    a = p["accent2"]
+    d.rectangle([0, 0, 13, 9], fill=a)
+    d.rectangle([0, 0, 13, 0], fill=G.lighter(a, 0.44))
+    d.rectangle([0, 6, 13, 7], fill=G.darker(a, 0.52))
+    d.rectangle([0, 9, 13, 9], fill=G.darker(a, 0.30))
+    d.rectangle([2, 2, 4, 4], fill=p["accent"])
+    return _rim(img, p)
+
+
+def paint_beacon(img, p, cx, floor_y, state):
+    """P1 灯柱 16x36：钢柱 + 灯头。state = off / idle / saved —— 存档点不是危险物，
+    所以它激活走青白而不是琥珀，免得玩家以为是能拣的东西。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    x0 = cx - 8
+    d.rectangle([x0, floor_y - 8, x0 + 15, floor_y - 1], fill=p["deep"])
+    d.rectangle([x0, floor_y - 8, x0 + 15, floor_y - 1], outline=p["lip"])
+    d.rectangle([x0, floor_y - 8, x0 + 15, floor_y - 7], fill=G.lighter(p["metal"], 0.16))
+    d.rectangle([x0 + 5, floor_y - 28, x0 + 10, floor_y - 8], fill=p["metal"])
+    d.rectangle([x0 + 5, floor_y - 28, x0 + 5, floor_y - 8], fill=G.lighter(p["metal"], 0.22))
+    d.rectangle([x0 + 2, floor_y - 36, x0 + 13, floor_y - 28], fill=G.darker(p["metal"], 0.20))
+    d.rectangle([x0 + 2, floor_y - 36, x0 + 13, floor_y - 28], outline=p["lip"])
+    lit = {"off": G.darker(p["metal"], 0.55),
+           "idle": p["glass"],
+           "saved": G.lighter(p["accent"], 0.55)}[state]
+    d.rectangle([x0 + 4, floor_y - 34, x0 + 11, floor_y - 30], fill=lit)
+    if state != "off":
+        d.rectangle([x0 + 2, floor_y - 36, x0 + 13, floor_y - 36],
+                    fill=G.mix(p["accent"], (255, 255, 255), 0.7) + (90,))
+
+
+def paint_terminal(img, p, cx, floor_y, state):
+    """P2 地台终端 32x14：矮台 + 斜面屏。屏上内容 = 已存档的读法全靠那条横线在不在。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    x0 = cx - 16
+    d.rectangle([x0, floor_y - 12, x0 + 31, floor_y - 1], fill=p["deep"])
+    d.rectangle([x0, floor_y - 12, x0 + 31, floor_y - 1], outline=p["lip"])
+    d.rectangle([x0, floor_y - 12, x0 + 31, floor_y - 11], fill=G.lighter(p["metal"], 0.18))
+    d.rectangle([x0, floor_y - 1, x0 + 31, floor_y - 1], fill=p["edge"])
+    d.rectangle([x0 + 4, floor_y - 9, x0 + 27, floor_y - 3], fill=p["screen"])
+    if state == "off":
+        d.rectangle([x0 + 6, floor_y - 7, x0 + 11, floor_y - 6], fill=G.darker(p["metal"], 0.30))
+    elif state == "idle":
+        d.rectangle([x0 + 6, floor_y - 7, x0 + 24, floor_y - 6], fill=p["glass"])
+    else:
+        d.rectangle([x0 + 6, floor_y - 7, x0 + 24, floor_y - 6], fill=G.lighter(p["accent"], 0.50))
+        d.rectangle([x0 + 6, floor_y - 5, x0 + 16, floor_y - 4], fill=p["accent"])
+
+
+def paint_spikes(img, unit, x0, floor_y, w):
+    cx = x0
+    while cx < x0 + w:
+        take = min(unit.width, x0 + w - cx)
+        img.paste(unit.crop((0, 0, take, unit.height)), (cx, floor_y - unit.height),
+                  unit.crop((0, 0, take, unit.height)))
+        cx += take
+
+
+def m5_rows(p, terrain, decor, root):
+    """一屏一个候选：S 尖刺 / E 电棒（横棒 + 竖电闸）/ K 钥匙 / P 存档点。"""
+    rim = G.STYLES["g2"]["player_rim"]
+    ink = G.lighter(p["lip"], 0.10)
+    W, H, FY = 248, 140, 124
+    strips = []
+
+    for teeth, height, label in ((4, 10, "S1  spikes  dense  teeth 4/16"),
+                                 (2, 12, "S2  spikes  sparse teeth 2/16"),
+                                 (1, 14, "S3  spikes  one tooth / cell")):
+        img = context_strip(p, terrain, decor, W, H, FY)
+        u = part_spikes(p, teeth, height)
+        paint_spikes(img, u, 24, FY, 96)
+        paint_spikes(img, u, 152, FY, 40)      # 断口另起一段，看平铺接缝会不会跳
+        G.paste_slime(img, "idle", 2, 224, FY, False, 1, root, rim)
+        strips.append((img, label + "   run / gap / scale"))
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    lo = bar_unit(p, 96, 8, True)
+    img.paste(lo, (16, FY - 18), lo)
+    G.paste_slime(img, "idle", 2, 196, FY, False, 1, root, rim)
+    strips.append((img, "E1  bar on the floor (live)   blocks both ways"))
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    hi = bar_unit(p, 96, 8, True)
+    img.paste(hi, (16, FY - 48), hi)
+    G.paste_slime(img, "crouch", 2, 64, FY, False, 1, root, rim)
+    G.paste_slime(img, "idle", 2, 196, FY, False, 1, root, rim)
+    d = ImageDraw.Draw(img)
+    d.text((16, FY - 66), "crouch under it", fill=ink, font=_font(12))
+    strips.append((img, "E2  same bar raised 30   D27: crouching walks past it for free"))
+
+    for kind, label in ((part_key_ring(p), "K1  ring key  14x12"),
+                        (part_key_card(p), "K2  energy card  14x10")):
+        img = context_strip(p, terrain, decor, W, 72, 56)
+        img.paste(kind, (56, 56 - kind.height - 1), kind)
+        d = ImageDraw.Draw(img)
+        d.text((44, 12), "floor", fill=ink, font=_font(12))
+        G.paste_slime(img, "idle", 2, 168, 56, False, 1, root, rim)
+        img.paste(kind, (168 - kind.width // 2, 56 - 30 - kind.height), kind)
+        d.text((192, 16), "held", fill=ink, font=_font(12))
+        strips.append((img, label))
+
+    for which in ("beacon", "terminal"):
+        img = context_strip(p, terrain, decor, W, 72, 56)
+        for i, state in enumerate(("off", "idle", "saved")):
+            cx = 48 + i * 80
+            if which == "beacon":
+                paint_beacon(img, p, cx, 56, state)
+            else:
+                paint_terminal(img, p, cx, 56, state)
+            d = ImageDraw.Draw(img)
+            d.text((cx - 16, 6), state, fill=ink, font=_font(12))
+        strips.append((img, "P1  beacon  16x36" if which == "beacon"
+                       else "P2  floor terminal  32x14"))
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    d = ImageDraw.Draw(img)
+    for i, live in enumerate((False, True)):
+        gate = bar_unit(p, 48, 8, live).transpose(Image.ROTATE_90)
+        x = 44 + i * 124
+        img.paste(gate, (x, FY - gate.height), gate)
+        G.paste_slime(img, "idle" if not live else "run", 1 + i, x - 26, FY, False, 1, root, rim)
+        d.text((x - 8, FY - gate.height - 20), "OFF" if not live else "LIVE",
+               fill=ink, font=_font(12))
+    strips.append((img, "E3  same bar rotated 90 = gate   OFF walk / LIVE solid + deadly"))
+    return strips
+
+
+def m5_context(p, terrain, decor, root):
+    """把新零件和现有的 ab 门放进同一间 g 房里。这张才是真正要肉眼判的一张：
+    混着看到底协不协调，只有画在一起才看得出来。"""
+    w, h, floor_y = 496, 168, 152
+    img = context_strip(p, terrain, decor, w, h, floor_y)
+    ab = G.STYLES["ab"]
+    parts_ab = make_parts(ab, ab["deep"], ab["accent2"])
+    paint_door(img, ab, parts_ab, 300, floor_y, 0.0, False)
+    d = ImageDraw.Draw(img)
+    d.rectangle([298, floor_y - 103, 301, floor_y - 102], fill=p["accent2"])   # 锁着的 LED
+    u = part_spikes(p, 4, 10)
+    paint_spikes(img, u, 24, floor_y, 72)
+    paint_spikes(img, u, 360, floor_y, 56)
+    gate = bar_unit(p, 48, 8, True).transpose(Image.ROTATE_90)
+    img.paste(gate, (152, floor_y - gate.height), gate)
+    key = part_key_ring(p)
+    img.paste(key, (60, floor_y - key.height - 1), key)
+    paint_beacon(img, p, 424, floor_y, "saved")
+    G.paste_slime(img, "run", 3, 96, floor_y, False, 1, root,
+                  G.STYLES["g2"]["player_rim"])
+    return img
+
+
+def m5_contrast(p):
+    """选型图的自我核对：新零件主色对墙 / 对地面的对比度。低于 4.5 只是提示，不当否决（D26 第 8 条）。"""
+    rows = [("spike tip", p["lip"]), ("beam core", G.lighter(p["accent"], 0.74)),
+            ("beam body", p["accent"]), ("bar OFF dash", p["glass"]),
+            ("key amber", p["accent2"]),
+            ("beacon lit", G.lighter(p["accent"], 0.55)), ("beacon body", p["deep"]),
+            ("pole body", p["metal"]), ("metal rim (lip)", p["lip"]),
+            ("door slat (ab, as shipped)", G.STYLES["ab"]["deep"])]
+    print("\nM5 part                    lum    vs wall  vs floor")
+    for name, c in rows:
+        l = G._rlum(c if len(c) == 4 else c + (255,))
+        flag = "" if G._cr(c, p["bg"]) >= 4.5 else "   <- below 4.5"
+        print("%-26s %5.1f %7.2f %8.2f%s" % (name, l * 100, G._cr(c, p["bg"] + (255,)),
+                                             G._cr(c, p["surface"] + (255,)), flag))
+
+
+def m5_sheet():
+    """M5 选型图。底图用**实装风格 g** 的真图集而不是 ab —— 新零件在夜光墙上读不出来就白画。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES[G.SHIPPED]
+    terrain = G.build_terrain_atlas(p)
+    decor = G.build_decor_atlas(p)
+    rows = m5_rows(p, terrain, decor, root)
+    wide = m5_context(p, terrain, decor, root)
+
+    gap, pad, cap = 20, 16, 22
+    strip_w = rows[0][0].width * ZOOM
+    W = pad * 2 + strip_w * 2 + gap
+    pairs = [rows[i:i + 2] for i in range(0, len(rows), 2)]
+    cells, y = [], pad + cap
+    for pr in pairs:
+        hh = max(im.height for im, _ in pr) * ZOOM
+        cells.append((y, hh))
+        y += hh + 26 + gap
+    H = y + wide.height * ZOOM + 26 + pad
+    canvas = Image.new("RGB", (W, H), (16, 20, 30))
+    d = ImageDraw.Draw(canvas)
+    ink = (214, 224, 240)
+    d.text((pad, 6), "M5  HAZARD / KEY / CHECKPOINT   parts drawn on shipped style %s   "
+                     "bottom picture = mixed with the shipped ab door" % G.SHIPPED,
+           fill=ink, font=_font(14))
+    for (y0, hh), pr in zip(cells, pairs):
+        for col, (img, label) in enumerate(pr):
+            up = img.convert("RGB").resize((img.width * ZOOM, img.height * ZOOM), Image.NEAREST)
+            x = pad + col * (strip_w + gap)
+            canvas.paste(up, (x, y0))
+            d.text((x, y0 + hh + 4), label, fill=ink, font=_font(12))
+    y0 = cells[-1][0] + cells[-1][1] + 26 + gap
+    up = wide.convert("RGB").resize((wide.width * ZOOM, wide.height * ZOOM), Image.NEAREST)
+    canvas.paste(up, (pad, y0))
+    d.text((pad, y0 + up.height + 4), "all of them in one room at once  <- judge this one",
+           fill=ink, font=_font(12))
+    out = os.path.join(out_dir, "preview_m5.png")
+    canvas.save(out)
+    print("saved", out, canvas.size)
+    m5_contrast(p)
+
+
+def ceil_band(img, terrain, w, y):
+    """预览手搭一层天花板：把「上开」那格竖翻就是「下开」。引擎里 terrain 笔刷自动出，不用手管。"""
+    t = terrain.crop((2 * TILE, 3 * TILE, 3 * TILE, 4 * TILE)).transpose(Image.FLIP_TOP_BOTTOM)
+    for cx in range(0, w, TILE):
+        img.paste(t, (cx, y))
+
+
+def hang_spikes(img, unit, x0, ceil_bottom, w):
+    """倒挂尖刺 = 同一格零件竖翻。构件里就是 rotation = 180，不另出零件。"""
+    u = unit.transpose(Image.FLIP_TOP_BOTTOM)
+    paint_spikes(img, u, x0, ceil_bottom + u.height, w)
+
+
+def m5_final_rows(p, terrain, decor, root):
+    """定稿图三张：只画选中的件，而且按**真尺寸**画 —— 选型图里那根 68 px 的竖闸跳得过去，是示意尺寸。"""
+    rim = G.STYLES["g2"]["player_rim"]
+    W, H, FY = 496, 188, 172
+    strips = []
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    u = part_spikes(p, 1, 14)
+    paint_spikes(img, u, 24, FY, 128)
+    hang_spikes(img, u, 200, 16, 128)
+    G.paste_slime(img, "idle", 2, 424, FY, False, 1, root, rim)
+    strips.append((img, "S3  floor spikes  /  ceiling spikes  (same part, rotation 180)"))
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    for i, live in enumerate((False, True)):
+        b = bar_unit(p, 128, 8, live)
+        x = 40 + i * 240
+        img.paste(b, (x, FY - 92), b)          # 钉在半空 83 px 高，正卡在跳跃路线上
+        G.paste_slime(img, "jump", 0, x + 64, FY - 44, False, 1, root, rim)
+    strips.append((img, "F1  floating bar  OFF / LIVE   nothing holds it up, either orientation"))
+
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    gate = bar_unit(p, 120, 10, True).transpose(Image.ROTATE_90)
+    img.paste(gate, (248, FY - gate.height), gate)
+    G.paste_slime(img, "run", 2, 176, FY, False, 1, root, rim)
+    strips.append((img, "F2  gate  floor to ceiling   120 px span, no jump-over route"))
+    return strips
+
+
+def m5_room(p, terrain, decor, root):
+    """定稿混排间：选中的四件 + 现存的 ab 门，全按真尺寸摆进同一间房。"""
+    W, H, FY = 496, 188, 172
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    ab = G.STYLES["ab"]
+    paint_door(img, ab, make_parts(ab, ab["deep"], ab["accent2"]), 400, FY, 0.0, False)
+    ImageDraw.Draw(img).rectangle([398, FY - 103, 401, FY - 102], fill=p["accent2"])
+    u = part_spikes(p, 1, 14)
+    paint_spikes(img, u, 24, FY, 64)
+    hang_spikes(img, u, 24, 16, 64)
+    b = bar_unit(p, 96, 8, True)
+    img.paste(b, (104, FY - 92), b)
+    gate = bar_unit(p, 120, 10, False).transpose(Image.ROTATE_90)
+    img.paste(gate, (232, FY - gate.height), gate)
+    card = part_key_card(p)
+    img.paste(card, (200, FY - card.height - 1), card)
+    paint_terminal(img, p, 320, FY, "saved")
+    G.paste_slime(img, "run", 3, 80, FY, False, 1, root, G.STYLES["g2"]["player_rim"])
+    return img
+
+
+def m5_final():
+    """定稿图（单列，一张一条），输出 assets/props/preview_m5_shipped.png。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES[G.SHIPPED]
+    terrain = G.build_terrain_atlas(p)
+    decor = G.build_decor_atlas(p)
+    strips = m5_final_rows(p, terrain, decor, root) + [
+        (m5_room(p, terrain, decor, root),
+         "ROOM  S3 + floating bar + gate(OFF) + K2 + P2, next to the shipped ab door")]
+
+    pad, gap = 16, 22
+    W = pad * 2 + strips[0][0].width * ZOOM
+    H = pad + 22 + sum(im.height * ZOOM + 26 + gap for im, _ in strips) + pad
+    canvas = Image.new("RGB", (W, H), (16, 20, 30))
+    d = ImageDraw.Draw(canvas)
+    ink = (214, 224, 240)
+    d.text((pad, 6), "M5 SHIPPED SET  spikes S3 / key K2 / checkpoint P2 / bar (floating, "
+                     "any orientation)   style %s" % G.SHIPPED, fill=ink, font=_font(14))
+    y = pad + 22
+    for img, label in strips:
+        up = img.convert("RGB").resize((img.width * ZOOM, img.height * ZOOM), Image.NEAREST)
+        canvas.paste(up, (pad, y))
+        d.text((pad, y + up.height + 4), label, fill=ink, font=_font(12))
+        y += up.height + 26 + gap
+    out = os.path.join(out_dir, "preview_m5_shipped.png")
+    canvas.save(out)
+    print("saved", out, canvas.size)
+
+
+# ---------------------------------------------------------------- D36 刷卡门
+
+def paint_gate(img, p, ab, parts, cx, floor_y, progress, latched, w=32, h=96):
+    """刷卡门（D36）：同一副钢框里是一道**能量闸**，不是钢板。
+
+    通带取下部 h*(1-progress)，与卷帘取上部方向相反 —— 卷帘的缝在下面等着挤人，
+    光幕的缝在上面只会越让越开。顶端那三行残辉是断电的尾巴，碰撞只到亮带为止，
+    预览与构件走同一条算式。LED 锁着 = 琥珀（与钥匙同色，成对），闩开 = 青。
+    幕体**纯色半透明、不画纹路** —— 带光丝的那版用户看过直接否了：纹路丑，单纯一块蓝光幕就够。
+    半透明是必要的，背后的墙透得出来才读成「光」，平涂不透明就成了一块门板。
+
+    两处和构件逐像素对齐的写法，改这里要一起改构件：
+    - 锁着的 LED 取 **p（实装风格 g）的 amber**，不是门框那套 ab 的 —— 「与钥匙同色」判的是
+      `key_card.png` 落盘的那个色，用 ab 的琥珀差着一档亮度，成对这条就读不出来。
+    - 门楣下面那道亮脊**复用 header 零件自己的前两行**，不是平涂一块 metal：构件里这样写
+      就少一个要进 props.json 比对的色，预览与构件因此仍然是同一张纹理的同一截。
+    """
+    x0 = cx - w // 2
+    top = floor_y - h
+    tile_v(img, parts["jamb"], x0 - 4, top - 12, h + 12)
+    tile_v(img, parts["jamb"], x0 + w, top - 12, h + 12)
+    tile_h(img, parts["header"], parts["header_l"], parts["header_r"], x0 - 4, top - 12, w + 8)
+    tile_h_plain(img, parts["header"].crop((0, 0, 16, 2)), x0, top, w)
+    d = ImageDraw.Draw(img, "RGBA")
+    led = (x0 + w // 2 - 1, top - 7)
+    d.rectangle([led[0] - 1, led[1] - 1, led[0] + 2, led[1] + 2], fill=G.darker(ab["screen"], 0.2))
+    d.rectangle([led[0], led[1], led[0] + 1, led[1] + 1],
+                fill=G.mix(p["accent"], (255, 255, 255), 0.5) if latched else p["accent2"])
+    live = int(round(h * (1.0 - progress)))
+    if live <= 0:
+        return
+    band_top = floor_y - live
+    for i, a in enumerate((120, 66, 30)):
+        d.rectangle([x0, band_top - 1 - i, x0 + w - 1, band_top - 1 - i], fill=p["accent"] + (a,))
+    d.rectangle([x0, band_top + 1, x0 + w - 1, floor_y - 1], fill=p["accent"] + (150,))
+    d.rectangle([x0 - 1, band_top, x0 - 1, floor_y - 1], fill=p["accent"] + (48,))
+    d.rectangle([x0 + w, band_top, x0 + w, floor_y - 1], fill=p["accent"] + (48,))
+    rim = G.lighter(p["accent"], 0.45)
+    d.rectangle([x0, band_top, x0, floor_y - 1], fill=rim)
+    d.rectangle([x0 + w - 1, band_top, x0 + w - 1, floor_y - 1], fill=rim)
+    d.rectangle([x0, band_top, x0 + w - 1, band_top], fill=G.lighter(p["accent"], 0.74))
+    d.rectangle([x0, floor_y - 1, x0 + w - 1, floor_y - 1], fill=p["metal"])
+
+
+def gate_anim_row(p, terrain, decor, root):
+    """对照行：同样四个进度，左边卷帘、右边光幕。要看的不是好不好看，是「谁在动、往哪儿动」。"""
+    W, H, FY = 496, 188, 172
+    ab = G.STYLES["ab"]
+    parts_ab = make_parts(ab, ab["deep"], ab["accent2"])
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    d = ImageDraw.Draw(img)
+    for i in range(4):
+        prog = i / 3.0
+        cx = 56 + i * 112
+        paint_door(img, ab, parts_ab, cx, FY, prog, prog >= 1.0)
+        paint_gate(img, p, ab, parts_ab, cx + 56, FY, prog, prog > 0.0)
+        d.text((cx + 14, 44), "%.2f" % prog, fill=(214, 224, 240), font=_font(11))
+    d.text((42, 20), "shutter", fill=(214, 224, 240), font=_font(11))
+    d.text((104, 20), "gate", fill=(214, 224, 240), font=_font(11))
+    G.paste_slime(img, "run", 3, 452, FY, False, 1, root, G.STYLES["g2"]["player_rim"])
+    return img
+
+
+def gate_lock_row(p, terrain, decor, root):
+    """可读性行：锁着的光闸 + 头顶带着钥匙的主角。琥珀对琥珀能不能读成「这把开那扇」，看图就知道。"""
+    W, H, FY = 496, 188, 172
+    ab = G.STYLES["ab"]
+    parts_ab = make_parts(ab, ab["deep"], ab["accent2"])
+    img = context_strip(p, terrain, decor, W, H, FY)
+    ceil_band(img, terrain, W, 0)
+    paint_gate(img, p, ab, parts_ab, 300, FY, 0.0, False)
+    paint_door(img, ab, parts_ab, 120, FY, 0.0, False)
+    card = part_key_card(p)
+    G.paste_slime(img, "run", 2, 216, FY, False, 1, root, G.STYLES["g2"]["player_rim"])
+    img.paste(card, (216 - card.width // 2, FY - 30), card)
+    img.paste(card, (176, FY - card.height - 1), card)
+    d = ImageDraw.Draw(img)
+    d.text((86, 20), "button door (shutter)", fill=(214, 224, 240), font=_font(11))
+    d.text((258, 20), "key door, locked", fill=(214, 224, 240), font=_font(11))
+    d.text((196, FY - 48), "held key", fill=(214, 224, 240), font=_font(11))
+    return img
+
+
+def m5_door():
+    """D36 选型图（单列），输出 assets/props/preview_keydoor.png。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES[G.SHIPPED]
+    terrain = G.build_terrain_atlas(p)
+    decor = G.build_decor_atlas(p)
+    strips = [
+        (gate_anim_row(p, terrain, decor, root),
+         "D36  four pairs, same progress 0 -> 1; LEFT of each pair is the button door, RIGHT is "
+         "the key door.  Shutter hangs from the header and rises (gap opens BELOW, it can stop "
+         "on a head).  Gate is a field from the floor, dying TOP DOWN (gap opens ABOVE, it can "
+         "never squeeze anyone)."),
+        (gate_lock_row(p, terrain, decor, root),
+         "legibility: locked reader LED = same amber as the key.  Nothing moves in this door's "
+         "frame, the frame is the only solid part."),
+    ]
+
+    pad, gap, line = 16, 22, 15
+    blocks = [(_wrap(label, 108), im) for im, label in strips]
+    W = pad * 2 + strips[0][0].width * ZOOM
+    H = pad + 22 + sum(im.height * ZOOM + 4 + len(ls) * line + gap for ls, im in blocks) + pad
+    canvas = Image.new("RGB", (W, H), (16, 20, 30))
+    d = ImageDraw.Draw(canvas)
+    ink = (214, 224, 240)
+    d.text((pad, 6), "KEY DOOR  separate scene, separate animation (D36)   style %s" % G.SHIPPED,
+           fill=ink, font=_font(14))
+    y = pad + 22
+    for lines, im in blocks:
+        up = im.convert("RGB").resize((im.width * ZOOM, im.height * ZOOM), Image.NEAREST)
+        canvas.paste(up, (pad, y))
+        for i, text in enumerate(lines):
+            d.text((pad, y + up.height + 4 + i * line), text, fill=ink, font=_font(12))
+        y += up.height + 4 + len(lines) * line + gap
+    out = os.path.join(out_dir, "preview_keydoor.png")
+    canvas.save(out)
+    print("saved", out, canvas.size)
+
+
+def _wrap(text, width):
+    lines, cur = [], ""
+    for word in text.split():
+        if cur and len(cur) + 1 + len(word) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = word if not cur else cur + " " + word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+# ---------------------------------------------------------------- 落盘（选型定稿后）
+# 零件文件名 -> make_parts 的键。构件脚本 preload 的就是这些路径，改名要一起改。
+PART_FILES = {
+    "door_slat": "slat",
+    "door_bottom": "bottom",
+    "door_jamb": "jamb",
+    "door_header": "header",
+    "door_header_cap_l": "header_l",
+    "door_header_cap_r": "header_r",
+    "button_top": "top",
+    "button_base": "base",
+}
+
+
+def make_m5_parts(p):
+    """M5 落盘零件（D34 选型的 S3 / K2 / P2 + 电棒那套）。
+
+    每张都由**选型图用过的同一个调用**产出，不是「重新画一遍长得像的」：
+    定稿是用户看像素批的，落盘的像素必须和他批的那张逐位相同。
+    束厚写死在 `bar_live.png` 里（8 px → 可见带 9 行 + 摆动 ±2 = 13 行）而**不做导出项**，
+    理由是 D34 第 1 条那条：摆了没反应的旋钮比多一个零件糟。竖电闸 = 同一张纹理转 90°。
+    极柱出**左右两张**而不是一张运行时镜像：bar_unit 的原画里两根柱子都是左亮右暗
+    （同一盏灯照着），镜像会把右柱照成右亮左暗，和用户批过的像素对不上。
+    """
+    parts = {}
+    parts["spike_unit"] = part_spikes(p, 1, 14)
+    parts["bar_pole_l"] = part_pole(p, True)
+    parts["bar_pole_r"] = part_pole(p, False)
+    for name, live in (("bar_live", True), ("bar_off", False)):
+        img = Image.new("RGBA", (16, 18), (0, 0, 0, 0))
+        # y=5 / mid=9：与 bar_unit 同一处，构件按同样位置平铺。
+        paint_beam(img, p, 0, 5, 16, 8, live)
+        parts[name] = img
+    parts["key_card"] = part_key_card(p)
+    for name, state in (("terminal_idle", "idle"), ("terminal_saved", "saved")):
+        img = Image.new("RGBA", (32, 12), (0, 0, 0, 0))
+        paint_terminal(img, p, 16, 12, state)
+        parts[name] = img
+    return parts
+
+
+def emit_parts():
+    """把选定配色的零件写成 PNG + props.json。构件的 _draw() 只认这些文件。"""
+    import json
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES["ab"]
+    g = G.STYLES[G.SHIPPED]
+    parts = make_parts(p, p["deep"], p["accent2"])
+    manifest = {
+        "style": "ab",
+        "door_body": "deep",
+        "button_face": "accent2",
+        "led_socket": list(G.darker(p["screen"], 0.2)),
+        "led_lit": list(G.mix(p["accent"], (255, 255, 255), 0.5)),
+        "button_socket": list(p["screen"]),
+        "end_shade": list(G.darker(p["metal"], 0.45)),
+        # M5（D29~D36）：一个 manifest 里两个 style 是**有意为之**。门/按钮钉在 ab 是 D25/D26
+        # 的定案（用户看过对比数字后接受），而 M5 那批零件是他在 g 底的选型图里定稿的，
+        # 落盘必须与 --m5final 出的预览逐像素相同，否则「看图定稿」这条链就断了。
+        "m5_style": G.SHIPPED,
+        "gate_led_locked": list(g["accent2"]),
+        "gate_led_lit": list(G.mix(g["accent"], (255, 255, 255), 0.5)),
+        "gate_curtain": list(g["accent"]),
+        "parts": {},
+    }
+    for fname, key in PART_FILES.items():
+        img = parts[key].convert("RGBA")
+        img.save(os.path.join(out_dir, fname + ".png"))
+        manifest["parts"][fname] = [img.width, img.height]
+    for fname, img in make_m5_parts(g).items():
+        img.save(os.path.join(out_dir, fname + ".png"))
+        manifest["parts"][fname] = [img.width, img.height]
+    with open(os.path.join(out_dir, "props.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, ensure_ascii=False)
+    print("emitted %d parts + props.json to %s" % (len(PART_FILES) + 8, out_dir))
+
+
+def main():
+    import sys
+    if "--emit" in sys.argv:
+        emit_parts()
+        return
+    if "--m5" in sys.argv:
+        m5_sheet()
+        return
+    if "--m5final" in sys.argv:
+        m5_final()
+        return
+    if "--m5door" in sys.argv:
+        m5_door()
+        return
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES["ab"]
+    terrain = G.build_terrain_atlas(p)
+    decor = G.build_decor_atlas(p)
+
+    rows = door_row(p, terrain, decor, root) + button_row(p, terrain, decor, root)
+    pr = parts_row(p)
+    gap, pad = 24, 16
+    strip_w = rows[0][0].width * ZOOM
+    W = pad * 2 + strip_w * 2 + gap
+    H = pad + 22 + (rows[0][0].height * ZOOM + 18 + gap) + (rows[2][0].height * ZOOM + 18 + gap) + pr.height + pad
+    canvas = Image.new("RGB", (W, H), (188, 195, 205))
+    d = ImageDraw.Draw(canvas)
+    d.text((pad, 6), "DOOR / BUTTON PLATE  lab-style art (shipped: M2 dark steel + B1 amber)  "
+                     "/  bottom row = tiling parts x6",
+           fill=(24, 28, 34), font=_font(14))
+    y_door = pad + 22
+    y_button = y_door + rows[0][0].height * ZOOM + 18 + gap
+    for i, (img, label) in enumerate(rows):
+        col, row = i % 2, i // 2
+        x = pad + col * (strip_w + gap)
+        y = y_door if row == 0 else y_button
+        up = img.convert("RGB").resize((img.width * ZOOM, img.height * ZOOM), Image.NEAREST)
+        canvas.paste(up, (x, y))
+        d.text((x, y + up.height + 3), label, fill=(24, 28, 34), font=_font(12))
+    y = y_button + rows[2][0].height * ZOOM + 18 + gap
+    canvas.paste(pr, (pad, y))
+    out = os.path.join(out_dir, "preview_props.png")
+    canvas.save(out)
+    print("saved", out)
+
+
+if __name__ == "__main__":
+    main()
