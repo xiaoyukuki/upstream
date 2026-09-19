@@ -1,6 +1,7 @@
 {
   "tile": 16,
-  "style": "ab",
+  "style": "g",
+  "surface_language": "sticker",
   "terrain": {
     "file": "tilesheet_terrain.png",
     "size": [

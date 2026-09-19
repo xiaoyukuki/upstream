@@ -2,9 +2,11 @@ extends Node
 ## 无头守门：瓦片图集 / TileSet / 模板三层的结构，加上 D24 第 6 条的「美术-碰撞 4 px 契约」。
 ##
 ## 量的是图集像素，不是调色板常量 —— 换一套配色这条守门照样成立：
-##   顶开的格子，第 0 行必须不透明、暗分隔线落在第 3 行（比次亮行暗、比主体暗）；
+##   顶开的格子，第 0 行必须不透明且是最暗的一格（描边），第 1 行是最亮的一格（内侧受光）；
 ##   左/右开的格子转 90 度同理，取样行固定取 8（避开角上踏面盖住竖面的那 4 像素）；
-##   底开的格子，最后两行必须比主体暗。
+##   底开的格子，最后两行必须比主体暗（这条两种语言下都一样）。
+## 锁的是「描边朝外」这个方向，不是具体颜色。所以换配色不用动它；哪天换回
+## 「亮边朝外」的金属语言（gen_tiles.py 里 soft=False 那几套），才需要把方向翻回来。
 ## 结构面：16 张地形 tile 各带且仅带一块整格碰撞多边形；装饰 tile 零碰撞；
 ## 模板里 WallFill/Decor/Tiles 三层的 z 序、碰撞开关、layer/mask、共用同一个 TileSet。
 ##
@@ -106,21 +108,24 @@ func _ready() -> void:
 			_ok(int(td.get_terrain_peering_bit(side_of[key])) == want_t,
 					"mask %d 的 %s peering = %d" % [mask, key, want_t])
 
-		# ---- 4 px 契约：量像素，不认配色
+		# ---- 4 px 契约（贴纸语言）：描边朝外，亮面收在里面一格
 		var ox: int = coords.x * tile
 		var oy: int = coords.y * tile
 		if mask & int(bits["up"]) == 0:
 			_ok(timg.get_pixel(ox + 8, oy).a > 0.8, "mask %d 顶边第 0 行不透明" % mask)
-			_ok(_lum(timg, ox + 8, oy + 3) < _lum(timg, ox + 8, oy + 1), "mask %d 暗线比次亮行暗" % mask)
-			_ok(_lum(timg, ox + 8, oy + 3) < _lum(timg, ox + 8, oy + 6), "mask %d 暗线比主体暗" % mask)
+			_ok(_lum(timg, ox + 8, oy) < _lum(timg, ox + 8, oy + 1), "mask %d 顶描边比内侧亮面暗" % mask)
+			_ok(_lum(timg, ox + 8, oy) < _lum(timg, ox + 8, oy + 6), "mask %d 顶描边比主体暗" % mask)
+			_ok(_lum(timg, ox + 8, oy + 1) > _lum(timg, ox + 8, oy + 6), "mask %d 顶亮面比主体亮" % mask)
 		if mask & int(bits["left"]) == 0:
 			_ok(timg.get_pixel(ox, oy + 8).a > 0.8, "mask %d 左边第 0 列不透明" % mask)
-			_ok(_lum(timg, ox, oy + 8) > _lum(timg, ox + 3, oy + 8), "mask %d 左暗线比亮边暗" % mask)
-			_ok(_lum(timg, ox + 3, oy + 8) < _lum(timg, ox + 6, oy + 8), "mask %d 左暗线比主体暗" % mask)
+			_ok(_lum(timg, ox, oy + 8) < _lum(timg, ox + 1, oy + 8), "mask %d 左描边比内侧亮面暗" % mask)
+			_ok(_lum(timg, ox, oy + 8) < _lum(timg, ox + 6, oy + 8), "mask %d 左描边比主体暗" % mask)
+			_ok(_lum(timg, ox + 1, oy + 8) > _lum(timg, ox + 6, oy + 8), "mask %d 左亮面比主体亮" % mask)
 		if mask & int(bits["right"]) == 0:
 			_ok(timg.get_pixel(ox + 15, oy + 8).a > 0.8, "mask %d 右边末列不透明" % mask)
-			_ok(_lum(timg, ox + 15, oy + 8) > _lum(timg, ox + 12, oy + 8), "mask %d 右暗线比亮边暗" % mask)
-			_ok(_lum(timg, ox + 12, oy + 8) < _lum(timg, ox + 9, oy + 8), "mask %d 右暗线比主体暗" % mask)
+			_ok(_lum(timg, ox + 15, oy + 8) < _lum(timg, ox + 14, oy + 8), "mask %d 右描边比内侧亮面暗" % mask)
+			_ok(_lum(timg, ox + 15, oy + 8) < _lum(timg, ox + 9, oy + 8), "mask %d 右描边比主体暗" % mask)
+			_ok(_lum(timg, ox + 14, oy + 8) > _lum(timg, ox + 9, oy + 8), "mask %d 右亮面比主体亮" % mask)
 		if mask & int(bits["down"]) == 0:
 			_ok(timg.get_pixel(ox + 8, oy + 15).a > 0.8, "mask %d 底边末行不透明" % mask)
 			_ok(_lum(timg, ox + 8, oy + 15) < _lum(timg, ox + 8, oy + 11), "mask %d 底边比主体暗" % mask)
