@@ -35,6 +35,8 @@ var _press_out_remaining: float = 0.0
 var _was_running: bool = false
 var _was_crouching: bool = false
 var _was_pressing: bool = false
+## 这一跳是直上直下。起跳那一帧闩一次，整个腾空期不改判 —— 见 `_pick()` 里那条注释。
+var _straight_flight: bool = false
 
 
 func _ready() -> void:
@@ -58,8 +60,12 @@ func _process(delta: float) -> void:
 
 
 ## 流体的惯性读法：起步时上身往后甩，刹车时往前扑。只看「地面跑动」这个状态的进出。
+## 蹲伏时不算跑动：否则「蹲着走 → 停下 → 起身」会在起身那一刻补播一段刹车甩动，
+## 而那段 0.19 s 的 stop 前伸 19 px，是所有剪辑里越界最狠的一帧（D23 同款理由）。
 func _track_slosh() -> void:
-	var running: bool = _player.is_on_floor() and absf(_player.velocity.x) > RUN_SPEED
+	var running: bool = (_player.is_on_floor()
+		and absf(_player.velocity.x) > RUN_SPEED
+		and not _player.is_crouching)
 	if running == _was_running:
 		return
 	_was_running = running
@@ -71,16 +77,21 @@ func _track_slosh() -> void:
 		_start_remaining = 0.0
 
 
-## 压扁是纯表现：只在「贴着地且按住下」的边沿上进/出，腾空时一个窗口都不留，
-## 否则从蹲姿起跳再落地会补播一段莫名其妙的起身。
+## 压扁的边沿来自**实际**蹲伏状态而不是按键（D27）：头顶被压住时按键早已松开，
+## 但人还蹲着，读按键会播出身动画，而碰撞盒仍是蹲的 —— 正是「画面与碰撞不一致」的镜像。
+## 腾空时一个窗口都不留，否则从蹲姿起跳再落地会补播一段莫名其妙的起身。
 func _track_crouch() -> void:
-	var crouching: bool = _player.is_on_floor() and _player.is_crouch_held
+	var crouching: bool = _player.is_crouching
 	if crouching == _was_crouching:
 		return
 	_was_crouching = crouching
 	if crouching:
 		_crouch_in_remaining = CROUCH_IN_CLIP_SECONDS
 		_crouch_out_remaining = 0.0
+		# 跑动中按下会同时触发「跑动→停」的 stop 窗口。蹲伏现在压过它，但那 0.19 s
+		# 会一直留着，等起身时补播一段莫名的刹车。进蹲就清掉，与 _on_jumped 同一套路。
+		_start_remaining = 0.0
+		_stop_remaining = 0.0
 	elif _player.is_on_floor():
 		_crouch_out_remaining = CROUCH_OUT_CLIP_SECONDS
 		_crouch_in_remaining = 0.0
@@ -106,7 +117,11 @@ func _pick() -> StringName:
 	if not _player.is_on_floor():
 		if _player.velocity.y > FALL_SPEED:
 			return &"fall"
-		return &"jump"
+		# 直上直下与倾斜是两套帧，判据是**起跳那一帧**的水平速度，整个腾空期不改判：
+		# 空中有 air_acceleration / air_friction，逐帧读会让一次跳跃中途换剪辑（跑跳途中松
+		# 方向键、原地跳途中推方向键都会触发）。闩锁说的是一件永真的事 ——「这一跳是竖直
+		# 起跳的」。与 D27 第 5 条同一条教训：表现钉在实际状态上，而不是钉在按键上。
+		return &"jump_straight" if _straight_flight else &"jump"
 	if _land_remaining > 0.0:
 		return &"land"
 	# 压平必须压过 start/stop：接触瞬间 velocity.x 被 move_and_slide() 削成 ~0，
@@ -116,18 +131,21 @@ func _pick() -> StringName:
 		return &"wall_press_in" if _press_in_remaining > 0.0 else &"wall_press"
 	if _press_out_remaining > 0.0:
 		return &"wall_press_out"
+	# D27：蹲伏压过跑动与甩动。这条优先级在 D22 时代是反的（"跑动全部压过蹲伏"），
+	# 那时蹲伏是纯表现，按着下键还能全速跑就播 run 也说得通；现在碰撞盒真蹲下了，
+	# 再播站姿的 run / start / stop 就是「画面起立、碰撞还蹲着」—— 看起来正是穿模。
+	if _crouch_in_remaining > 0.0:
+		return &"crouch_in"
+	if _player.is_crouching:
+		return &"crouch"
+	if _crouch_out_remaining > 0.0:
+		return &"crouch_out"
 	if _start_remaining > 0.0:
 		return &"start"
 	if _stop_remaining > 0.0:
 		return &"stop"
 	if absf(_player.velocity.x) > RUN_SPEED:
 		return &"run"
-	if _crouch_in_remaining > 0.0:
-		return &"crouch_in"
-	if _player.is_crouch_held:
-		return &"crouch"
-	if _crouch_out_remaining > 0.0:
-		return &"crouch_out"
 	return &"idle"
 
 
@@ -146,9 +164,12 @@ func _on_jumped() -> void:
 	_crouch_out_remaining = 0.0
 	_press_in_remaining = 0.0
 	_press_out_remaining = 0.0
+	_straight_flight = absf(_player.velocity.x) <= RUN_SPEED
 
 
 func _on_landed(fall_speed: float) -> void:
+	# 走在早退之前：轻落地也要清闩锁，否则之后「走下台阶」会沿用上一跳的剪辑。
+	_straight_flight = false
 	if fall_speed < MIN_LAND_IMPACT:
 		return
 	var t: float = (fall_speed - MIN_LAND_IMPACT) / (MAX_FALL_SPEED - MIN_LAND_IMPACT)

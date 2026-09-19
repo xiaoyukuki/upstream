@@ -7,7 +7,8 @@ extends Node2D
 ## 2. 剪辑按真实物理状态切换 idle/start/run/stop/jump/fall/land；
 ## 3. 世界冻结时玩家动画照常推进 —— 玩家豁免时停这条铁律现在多了一层视觉表达，
 ##    动画一旦被时停拖住，机制可读性就反过来了；
-## 4. 按住下键贴地压扁是纯表现：不改碰撞、不冻结世界，腾空/落地/跑动都压过它；
+## 4. 按住下键贴地压扁：不改碰撞的时代已结束（D26），现在碰撞盒一起缩、不冻结世界，
+##    腾空/落地/跑动都压过它；
 ## 5. 底边是波浪不是直线，且任何一列都不越过脚底基线（脚底对齐是美术与碰撞的契约）；
 ## 6. 推墙时贴墙一侧压平到碰撞盒边界（D23：墙侧越界 = 0），且同样是纯表现。
 ## 另外第 3 组守两条几何底线：站姿轮廓宽 > 高（要的是「扁」），最宽帧不挤 40 px 最小门洞。
@@ -68,6 +69,21 @@ func _step(n: int) -> void:
 		await get_tree().physics_frame
 
 
+func _body_shape() -> RectangleShape2D:
+	var holder := _player.get_node("CollisionShape2D") as CollisionShape2D
+	return holder.shape as RectangleShape2D
+
+
+func _body_height() -> float:
+	return _body_shape().size.y
+
+
+## 碰撞盒下缘在玩家本地坐标里的位置。脚底契约：任何姿态都必须等于 +15。
+func _foot_local() -> float:
+	var holder := _player.get_node("CollisionShape2D") as CollisionShape2D
+	return holder.position.y + _body_height() * 0.5
+
+
 ## 等到落地（或超时），再补几帧让 _process 里的状态机跟上。
 ## 开头先走两帧：is_on_floor() 存的是上一次 move_and_slide() 的结果，刚把玩家瞬移到空中时它还是 true。
 func _wait_until_landed(pad: int) -> void:
@@ -85,7 +101,7 @@ func _run() -> void:
 	var frames: SpriteFrames = _sprite.sprite_frames
 	var expected := {
 		"idle": [8, true], "run": [6, true], "start": [3, false], "stop": [3, false],
-		"jump": [2, false], "fall": [3, true], "land": [4, false],
+		"jump": [2, false], "jump_straight": [2, false], "fall": [3, true], "land": [4, false],
 		"crouch_in": [3, false], "crouch": [4, true], "crouch_out": [2, false],
 		"wall_press_in": [2, false], "wall_press": [2, true], "wall_press_out": [2, false],
 	}
@@ -141,13 +157,31 @@ func _run() -> void:
 	Input.action_press(&"jump")
 	await _step(4)
 	Input.action_release(&"jump")
-	_check(_sprite.animation == &"jump", "上升段播 jump（实际 %s）" % _sprite.animation)
+	_check(_sprite.animation == &"jump_straight", "原地起跳播直上直下（实际 %s）" % _sprite.animation)
 	await _step(40)
 	_check(not _player.is_on_floor() and _player.velocity.y > 140.0,
 		"已进入下落段（vy=%.0f）" % _player.velocity.y)
 	_check(_sprite.animation == &"fall", "下落段播 fall（实际 %s）" % _sprite.animation)
 	await _wait_until_landed(2)
 	_check(_sprite.animation == &"land", "跳落后播 land（实际 %s）" % _sprite.animation)
+
+	print("[sprite_selftest] 5b. 带水平速度起跳播倾斜版 jump，且腾空期不改判")
+	await _step(26)
+	_check(_player.is_on_floor(), "5b 起跳前已落地")
+	Input.action_press(&"move_right")
+	await _step(16)
+	_check(_sprite.animation == &"run", "先跑起来（实际 %s）" % _sprite.animation)
+	Input.action_press(&"jump")
+	await _step(4)
+	Input.action_release(&"jump")
+	_check(_sprite.animation == &"jump", "带速度起跳播倾斜版 jump（实际 %s）" % _sprite.animation)
+	Input.action_release(&"move_right")
+	# 直接把水平速度抹成 0：逐帧读速度的实现会在这里翻成直上直下，闩锁实现不会。
+	_player.velocity.x = 0.0
+	await _step(6)
+	_check(_sprite.animation == &"jump",
+		"起跳后水平速度归零也不换剪辑（实际 %s）" % _sprite.animation)
+	await _wait_until_landed(2)
 
 	print("[sprite_selftest] 6. 轻落地不播 land")
 	await _step(20)
@@ -170,7 +204,8 @@ func _run() -> void:
 	Input.action_press(&"jump")
 	await _step(4)
 	Input.action_release(&"jump")
-	_check(_sprite.animation == &"jump", "蹲姿起跳直接播 jump（实际 %s）" % _sprite.animation)
+	_check(_sprite.animation == &"jump_straight",
+		"蹲姿起跳（vx≈0）播直上直下（实际 %s）" % _sprite.animation)
 	await _step(40)
 	_check(_sprite.animation == &"fall", "空中不播任何压扁剪辑（实际 %s）" % _sprite.animation)
 	# 按住下落地：land 窗口压过 crouch（先拍一帧扁的），窗口过了才进压扁循环
@@ -291,6 +326,85 @@ func _run() -> void:
 	_check(_sprite.animation != &"wall_press_out", "腾空不播回弹（实际 %s）" % _sprite.animation)
 	await _wait_until_landed(2)
 	_check(_sprite.animation != &"wall_press_out", "落地也不补播回弹（实际 %s）" % _sprite.animation)
+
+	print("[sprite_selftest] 10. 蹲伏改碰撞盒 + 头顶被压不许起身（D27）")
+	# 低矮天花板：底面在地面以上 18 px，夹在蹲伏盒顶(15) 与站姿盒顶(30) 之间。
+	# 站着必撞、蹲着留 3 px 余量 —— 这两个数决定了这一组全部断言都成立。
+	const CEIL_X := 950.0
+	const CEIL_BOTTOM := -18.0
+	var ceil_body := StaticBody2D.new()
+	var ceil_holder := CollisionShape2D.new()
+	var ceil_rect := RectangleShape2D.new()
+	ceil_rect.size = Vector2(120.0, 200.0)
+	ceil_holder.shape = ceil_rect
+	ceil_holder.position = Vector2(CEIL_X, CEIL_BOTTOM - 100.0)
+	ceil_body.add_child(ceil_holder)
+	add_child(ceil_body)
+
+	# 挪到开阔处：第 9 组结束时人贴在 x≈600 的墙边，往右跑会撞墙触发压平剪辑，
+	# 而压平的优先级高于蹲伏，会把这一组的断言全部顶掉。
+	Input.action_release(&"move_down")
+	_player.velocity = Vector2.ZERO
+	_player.global_position = Vector2(200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _step(6)
+	_check(not _player.is_crouching, "起始为站立")
+	_check(is_equal_approx(_body_height(), Player.STAND_HEIGHT),
+		"站立碰撞盒高 %.1f（期望 %.1f）" % [_body_height(), Player.STAND_HEIGHT])
+
+	Input.action_press(&"move_down")
+	await _step(14)
+	_check(_player.is_crouching, "按住下键进入蹲伏")
+	_check(is_equal_approx(_body_height(), Player.CROUCH_HEIGHT),
+		"蹲伏时碰撞盒高 %.1f（期望 %.1f，与美术同比例）" % [_body_height(), Player.CROUCH_HEIGHT])
+	_check(is_equal_approx(_foot_local(), Player.COLLISION_HALF_HEIGHT),
+		"蹲伏时脚底仍在 +%.0f（实际 %.2f），盒子只从顶部缩"
+			% [Player.COLLISION_HALF_HEIGHT, _foot_local()])
+	_check(_sprite.animation == &"crouch", "蹲伏播压扁循环（实际 %s）" % _sprite.animation)
+
+	# 蹲着移动：碰撞盒已经是蹲的，播站姿的 run / start / stop 就是「画面起立、碰撞还蹲着」
+	Input.action_press(&"move_right")
+	await _step(16)
+	_check(_player.is_crouching, "蹲着移动时仍是蹲伏状态")
+	_check(absf(_player.velocity.x) > 15.0, "确实在移动（vx=%.1f）" % _player.velocity.x)
+	_check(_sprite.animation == &"crouch",
+		"蹲着移动仍播压扁循环，不被跑动剪辑覆盖（实际 %s）" % _sprite.animation)
+	Input.action_release(&"move_right")
+	await _step(24)
+	_check(_sprite.animation == &"crouch", "停下后仍保持蹲伏（实际 %s）" % _sprite.animation)
+	_check(_sprite.animation != &"stop", "起身前不补播刹车甩动（实际 %s）" % _sprite.animation)
+
+	# 蹲着钻进低矮处：蹲伏盒有 3 px 余量，站姿盒会撞进去 12 px
+	_player.velocity = Vector2.ZERO
+	_player.global_position = Vector2(CEIL_X, -Player.COLLISION_HALF_HEIGHT)
+	await _step(3)
+	_check(_player.is_on_floor(), "已站到低矮天花板下")
+	Input.action_release(&"move_down")
+	await _step(8)
+	_check(_player.is_head_blocked, "头顶被压：is_head_blocked 挂上")
+	_check(_player.is_crouching, "头顶被压时不自动起身（实际 is_crouching=%s）" % _player.is_crouching)
+	_check(is_equal_approx(_body_height(), Player.CROUCH_HEIGHT),
+		"被压时碰撞盒仍是蹲伏高 %.1f" % _body_height())
+	_check(_sprite.animation == &"crouch",
+		"被压时不播起身剪辑（实际 %s）" % _sprite.animation)
+	Input.action_press(&"jump")
+	await _step(6)
+	Input.action_release(&"jump")
+	_check(_player.is_on_floor() and absf(_player.velocity.y) < 1.0,
+		"被压住时跳跃无效（on_floor=%s vy=%.1f）" % [_player.is_on_floor(), _player.velocity.y])
+	_check(not _player.is_head_blocked or _player.is_crouching, "跳跃被拦后仍在蹲伏")
+
+	# 挪出低矮处：净空恢复，应当自动起身
+	_player.velocity = Vector2.ZERO
+	_player.global_position = Vector2(100.0, -Player.COLLISION_HALF_HEIGHT)
+	await _step(3)
+	_check(not _player.is_head_blocked, "离开低矮处后净空恢复")
+	await _step(20)
+	_check(not _player.is_crouching, "松开下键且头顶有净空后起身")
+	_check(is_equal_approx(_body_height(), Player.STAND_HEIGHT),
+		"起身后碰撞盒还原 %.1f（实际 %.1f）" % [Player.STAND_HEIGHT, _body_height()])
+	_check(is_equal_approx(_foot_local(), Player.COLLISION_HALF_HEIGHT),
+		"起身后脚底仍在 +%.0f（实际 %.2f）" % [Player.COLLISION_HALF_HEIGHT, _foot_local()])
+	_check(_sprite.animation == &"idle", "起身后回 idle（实际 %s）" % _sprite.animation)
 
 	print("SPRITE SELFTEST DONE failures=%d" % _failures)
 	get_tree().quit(1 if _failures > 0 else 0)
