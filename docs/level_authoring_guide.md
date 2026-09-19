@@ -12,7 +12,8 @@
 3. 地形两条路：在 `Terrain/Tiles` 层**刷瓦片**（新关推荐，见 §12），或在 `Terrain` 下摆 `platform.tscn` 实例（旧关与快速原型仍可用，两者同在地形碰撞层）。`Terrain/WallFill` 与 `Terrain/Decor` 两层刷背景贴面与装饰，都无碰撞。
 4. 在 `Objects` 下摆构件（门/按钮/钟摆/移动方块/祭坛/触发区）。
 5. 配接线：把按钮拖到门的 `trigger` 属性上（模板里那扇示例门已经接好了，改指向即可）。摆图期间**不需要写关卡脚本**；只有场景表达不出来的逻辑（比如门由开关组合控制）才回到 `.gd` 里写，并把那扇门的 `trigger` 留空。
-6. 填根节点的 `camera_limits`。
+6. **祭坛与终点区不用写代码**（D28）：按约定摆 `Objects/AbilityAltar` 与 `Triggers/GoalZone`，`LevelBase` 自动接 —— 踩祭坛触发 D16 静止即启，踩终点触发停手后重开。挪了位置就在检查器改根节点的 `altar_path` / `goal_path`；本关不要祭坛就把那一项清空。
+7. 填根节点的 `camera_limits`。
 7. 跑：`main.tscn` 的根节点上把 `level_scene` 指过来（保留灰滤镜与调试面板），或直接 F5。
 
 模板自带一块 1280×32 的地面、两面侧墙、玩家、`PlayerSpawn` 和一个终点 `GoalZone`（踩到 → 停手 1.5 s → 自动重开）。
@@ -64,8 +65,8 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 | 构件 | 关键导出项 | 对外信号 | 摆的时候注意 |
 |---|---|---|---|
 | `platform.tscn` | `size`、`color` | — | 尺寸改了碰撞体自动跟上 |
-| `door.tscn` | `height`（门洞净高）、`width`、`open_time`、`trigger`、`panel_color` | `open_changed` | 卷帘式：顶边固定、底边上升。`height ≥ 40` 才过得了人。**`trigger` 里填谁，这扇门就被谁开**：点属性右侧的文件夹按钮选，或从场景树直接拖一个带 `pressed_changed(bool)` 的节点进来（按钮、触发区都行）。留空 = 归关卡脚本用 `set_open(bool)` 驱动。编辑器里会从门底画一条橙色线连到触发源，运行时不画 |
-| `button_plate.tscn` | `width`、`sensor_height`、`press_depth`、`plate_color` | `pressed_changed(bool)` | 冻结期间玩家走开**不会**松开，解冻当帧才弹起（画面自洽） |
+| `door.tscn` | `height`（门洞净高）、`width`、`open_time`、`trigger` | `open_changed` | 卷帘式：顶边固定、底边上升。`height ≥ 40` 才过得了人。**没有调色导出项**（D25：立绘是 `assets/props/` 的平铺零件 + 固定调色板，明度对比是量出来的契约）。**`trigger` 里填谁，这扇门就被谁开**：点属性右侧的文件夹按钮选，或从场景树直接拖一个带 `pressed_changed(bool)` 的节点进来（按钮、触发区都行）。留空 = 归关卡脚本用 `set_open(bool)` 驱动。编辑器里会从门底画一条橙色线连到触发源，运行时不画 |
+| `button_plate.tscn` | `width`、`sensor_height`、`press_depth` | `pressed_changed(bool)` | 冻结期间玩家走开**不会**松开，解冻当帧才弹起（画面自洽）。凹槽只有 8 px 深，`press_depth` 超过 8 画面就夹住了，调它没有意义。**没有调色导出项**（D25，同上） |
 | `pendulum.gd` | `amplitude_degrees`、`period`、`phase`、`rod_length`、两个颜色 | — | **无碰撞体**，纯演示。`phase` 单位是周期不是角度 |
 | `moving_block.tscn` | `travel_offset`、`block_size`、`travel_speed`、`block_color` | — | 行程是 `anchor ↔ anchor+offset` 的 pingpong；`layer = 4`，玩家能站上去 |
 | `ability_altar.tscn` | `width`、`altar_height`、`sensor_height`、`active_color`、`spent_color` | `ability_granted` | **只发信号，不开能力**。开启时机归关卡（见 §6） |
@@ -73,12 +74,17 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 
 编辑器里改这些导出项，门扇/摆杆/面板/触发带会**立刻重画**（全部构件都是 `@tool`）。移动方块在编辑器里不跑位移，只画行程线、两端圆点和终点轮廓；钟摆只画到 `phase` 对应的那一帧加一条扫掠弧。
 
+### 5.1 门与按钮的立绘从哪来（D25）
+
+`assets/props/` 下 8 张小零件 PNG（卷帘板 / 底边警示条 / 门柱 / 门楣 / 端帽一对 / 按钮踩面 / 按钮钢座）由 `py tools/gen_props.py --emit` 生成，构件 `preload` 后在 `_draw()` 里按当前开度与尺寸平铺。**别手改这些 PNG，也别给构件加回调色导出项** —— 尺寸清单和灯色都记在 `assets/props/props.json`，`verify_kit` 会双向比对（零件尺寸对不上清单、门板/按钮的常量色与 json 不同源，都会 FAIL）。要换配色就改 `tools/gen_props.py` 的调色板来源再重跑 `--emit`，然后跑 §10 第一条。
+
 ## 6. 关卡脚本能碰什么、不能碰什么
 
 - **玩法连线优先写在场景里**（D20）：按钮开哪扇门 = 把按钮拖到门的 `trigger` 上，不用来关卡脚本写。编辑器里门会画一条橙线连到触发源，没接线的门就是光秃秃的。关卡脚本只负责"这扇门由别的条件管"这类场景里表达不出来的逻辑 —— 那种时候把 `trigger` 留空，脚本来调 `set_open()`。
+- **D16 与 D18 已经不用写了**（D28）：祭坛授予能力与终点区收尾都下沉到了 `LevelBase`，摆对节点即可。想要不同的节奏改根节点上的导出项：`ability_enable_timeout`（默认 2.5 s）、`goal_restart_delay`（默认 1.5 s，填 0 表示不自动重开）。想加自己的日志/演出，覆写 `_begin_ability_sequence()` 与 `_on_ability_enabled(reason, wait)`。
 - 可以：构件信号、`TimeManager.set_ability_enabled(bool)`、`TimeManager.reset_state()`、`TimeManager.elapsed_world_time`、`LevelBase.restart_level()`。
 - 不可以：直接改构件内部、用 `Engine.time_scale`、绕过 `TimeReceiver` 自己计时。构件的 `_process/_physics_process` 一律读 `TimeReceiver.get_physics_delta()`，冻结时那个值是 0。
-- **D16 静止即启**：踩上祭坛不要当帧 `set_ability_enabled(true)`，要等玩家松手（或 2.5 s 兜底）。抄 `level_01_tutorial.gd` 的 `_tick_ability`。这条保证玩家第一次冻结一定是"我按了方向键"造成的。
+- **别把子类方法起成基类被 `connect` 的那个名字**：GDScript 方法默认虚调用，子类同名会**覆盖**基类。比如终点日志要叫 `_log_goal_reached`，不能叫 `_on_goal_body_entered`（那是基类连的名字，覆盖后自动重开直接失效）。
 - 关卡自己的等待/节奏计时用 `_process` 的真实 delta，不要用门控 delta —— 否则"没松手 → 世界停 → 计时也停"是个死结。
 
 ## 7. `camera_limits` 怎么填
@@ -100,6 +106,7 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 | 起跳→回同层滞空 | 1.20 s |
 | 同层最大水平跳距 | 294 px（极限，别拿它设计） |
 | 玩家碰撞盒 | 20 × 30 px |
+| 玩家蹲伏碰撞盒（D27） | 20 × **15** px（脚底不动，只从顶部缩） |
 | 玩家美术轮廓 | 32 × 25 px（史莱姆序列帧，底边是波浪不是直线，脚底贴碰撞盒底边；拍扁帧最宽 34） |
 
 四条硬约束：
@@ -108,11 +115,16 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 2. **水平缺口 ≤ 160 px** —— 极限 294，但引导期不该考跳距。
 3. **坑深 ≤ 96 px** —— 玩家豁免时停，冻结中仍受重力；掉进跳不出来的坑 = 死局（96 ≤ 136 ✓）。
 4. **可通行缝隙 ≥ 40 px** —— 30 px 身高 + 10 px 余量。门洞、门半开时下方的缝都按这条卡。
+   **蹲着通过时 ≥ 25 px**（D27：蹲伏盒 15 px + 10 px 余量）。瓦片世界一格 16 px，刷不出 25，所以**瓦片地形里不存在"只能蹲着过"的缝** —— 这一条只在**门半开**那种连续可变的缝上才起作用。
 
 美术比碰撞盒**宽 12 px**（左右各 6）且**矮 5 px**。宽是故意的：40 px 的缝看上去比实际更紧，玩家会以为过不去而实际过得去。矮那 5 px 是「扁」造型的代价 —— 盒顶会露在美术之外，但第一章最小可通行开口 40 px，这 5 px 在任何真实通道里都碰不到。摆窄缝时按**视觉**留余量，别按 20 px 的碰撞盒算；跑动与压扁帧最宽到 34 px，40 px 的门洞在动起来只剩 3 px 余量。
 
 门的时间账：`open_time = 0.5` + 解冻缓冲 `0.08` → 松手后 **0.58 s 关严**。想让玩家"来不及"，只要让"跑过去的时间 > 0.58 s"，即按钮到门 **> 151 px**；引导关用了 432 px（1.66 s）。
-门落下来压到站在门洞里的玩家时会**停在他的头顶**（D21），不把他横弹出去，人一走开就续收到关严。摆图侧两条推论：一是玩家可以拿头顶住门，这条不打算禁；二是被顶住时留下的缝约 30 px，小于上面第 4 条的 40 px —— 不冲突，因为他离开那条缝的过程必然在移动、时间必然冻着。
+门落下来压到站在门洞里的玩家时会**停在他的头顶**（D21），不把他横弹出去，人一走开就续收到关严。摆图侧三条推论：
+
+1. 玩家可以拿头顶住门，这条不打算禁。
+2. 被顶住时留下的缝约 30 px，小于站立所需的 40 px —— 不冲突，因为他离开那条缝的过程必然在移动、时间必然冻着。
+3. **D27 之后这条缝变成可以蹲着钻过去**（30 ≥ 25）。而且蹲在门正下方会被锁在蹲姿：头顶是门就起不来，也跳不起来，只能横着挪出去（移动 = 冻结，门不追）或等按钮再按下让门上行。不会永久卡死，但**门 + 低矮处**可以做出这种锁定，摆图时要知道。
 
 ## 9. 跑起来与看日志
 
@@ -134,10 +146,10 @@ D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/U
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream res://tools/tileset_selftest.tscn
 ```
 
-`verify_kit` 验编译、场景可实例化、导出项齐、`@tool` 在位、派生几何（带心 −15、两扇门不共用形状资源），以及**引导关与模板里每扇门的 `trigger` 都指向一个真的发 `pressed_changed` 的节点**（漏配、指向空、指错类型都会 FAIL）。
+`verify_kit` 验编译、场景可实例化、导出项齐、`@tool` 在位、派生几何（带心 −15、两扇门不共用形状资源），**每扇门的 `trigger` 都指向一个真的发 `pressed_changed` 的节点**（漏配、指向空、指错类型都会 FAIL），以及 D25 的立绘零件：8 张 PNG 的像素尺寸对得上 `props.json`、卷帘缝行比高光明、门底是琥珀且斜条有明暗、按钮前唇比凹槽亮、四个灯色与构件脚本常量同源（漏跑 `--emit` 或只改一边都会响）。
 `kit_selftest` 验冻结语义没被改坏：门在冻结期开度一字不动、解冻后续走、全开时碰撞体收零、移动方块始终留在行程内；外加接线那一条 —— 按下即开、冻结中松开只记意图不位移、换 `trigger` 后旧按钮立即失效、`SensorZone` 当触发源也一样。
 `sprite_selftest` 验主角动画：帧资源与 `clips.json` 一致、脚底贴碰撞盒底边、idle/run/jump/fall/land 按真实物理状态切换、**世界冻结时玩家动画照常推进**、按住下键的压扁剪辑是纯表现（不冻结世界、不产生位移、腾空不播）、底边波浪不越过脚底基线行。
-`tileset_selftest` 验瓦片：16 张地形 tile 各带**且仅带**一块整格碰撞多边形、64 条 peering bit 与清单一致、装饰 tile 零碰撞且 alpha 非空、模板三层 z 序与共用 TileSet、以及「踏面暗线落在碰撞边 4 px 内」的美术-碰撞契约 —— 这条量的是图集像素而不是调色板常量，换配色照样成立。
+`tileset_selftest` 验瓦片（308 条）：16 张地形 tile 各带**且仅带**一块整格碰撞多边形、64 条 peering bit 与清单一致、装饰 tile 零碰撞且 alpha 非空、模板三层 z 序与共用 TileSet，外加一组「让引擎自己的 terrain 求解器刷一块 5×3 实心、读回每格选中哪张图」——peering bit 方向接反只有这条路验得出来。还有 D24 第 6 条的**美术-碰撞 4 px 契约**：开放那一侧的最外一圈（描边）必须不透明且比内侧亮面暗、底面那两行必须比主体暗 —— 量的是图集像素而不是调色板常量，所以 D26 从「亮边朝外」翻成「描边朝外」时只改了断言方向，换任何一套配色这条照样成立。
 四条都打印 `failures=0` 才算过。
 
 ## 11. 已知坑
@@ -145,8 +157,10 @@ D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/U
 - **改过带 `class_name` 的脚本之后要重启编辑器。** 运行中的编辑器不会刷新 `class_name` 缓存（`scan()` / `reload()` 都不管用），依赖它的场景会报"标识符找不到"，而且这时候保存场景可能把新增的导出项写丢。游戏进程不受影响。
 - 保存场景时，`@tool` 运行期生成的 `CollisionShape2D` 会被烘进 `.tscn` 成为 sub_resource。**无害** —— 装载时构件按导出项重算，导出项才是唯一真相。
 - 关卡场景里**必须**有 `Player`（在 `player` 组）与 `PlayerSpawn`，否则 `LevelBase` 拿不到相机、玩家停在场景里的编辑期位置。
-- 一个关卡只放一个 `AbilityAltar`：它是一次性的，第二次踩不发信号。
+- 一个关卡只放一个 `AbilityAltar`：它是一次性的，第二次踩不发信号。（这条现在有守门：`verify_kit` 会计数，放两个直接 FAIL。）
+- **祭坛只发信号，不开能力**：开启时机归 `LevelBase`（D28）。所以"踩上去没反应"先查两件事 —— 一是 `altar_path` 指没指到（节点挪过位置就要在检查器重指），二是关卡脚本有没有把基类的 `_begin_ability_sequence()` 覆盖掉却忘了 `super.` 调用。
 - 钟摆没有碰撞体，别指望它挡路；要挡路用 `MovingBlock` 或地形。
+- **出生点要有 30 px 站姿净空**（D27）：玩家以站姿碰撞盒生成，若 `PlayerSpawn` 压在低矮处，一开局盒子就陷进天花板，会被 `move_and_slide()` 顶出去。想让玩家一开局就蹲着，得让他先站在开阔处再自己按 S。
 - **TileMapLayer 没有 `collision_layer` / `collision_mask` 节点属性（4.6 实测）**。碰撞层写在 TileSet 的物理层上（`lab_tileset.tres` 物理层 0 = layer 1 / mask 0），节点上只有 `collision_enabled` 能整层关。所以「哪层有碰撞」由「哪个源带碰撞多边形」决定：只有地形源带。
 - **装饰刷在地形格上会消失**：`Decor` 的 z 在 `Tiles` 下面。要贴在地形表面的东西（警示条之类）刷在紧邻的**空格子**里，别叠在地形格上。
 - **"指向另一个节点"的导出项必须用 `@export_node_path`，不能用 `export(Node)`。** 实测 4.6：`.tscn` 里给 `Node` 类型的槽写 `trigger = NodePath("../ButtonPlate")`，游戏进程 `instantiate()` 之后读回来是 `null`（`get("trigger")` 的 `typeof` 是 19 = NodePath，引用根本没被还原成节点）；而 `^NodePath(...)` 这种写法不是合法的文本语法，场景直接实例化失败。所以构件侧一律存 `NodePath`，**进树之后**再用 `get_node_or_null()` 解析 —— 相对路径在树外解析不了。以后再加同类槽位（比如"这个开关控制哪个机关"）照这条来，别再试 `export(Node)`。
@@ -157,12 +171,13 @@ D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/U
 
 | 层 | z | 碰撞 | 刷什么 |
 |---|---|---|---|
-| `WallFill` | -30 | 无 | `wall_fill` 一格瓷面，铺满所有空格子（背景墙） |
+| `WallFill` | -30 | 无 | `wall_fill` 一格背景填充，铺满所有空格子（背景墙） |
 | `Decor` | -20 | 无 | 装饰大图（窗 6×4 格、灯 6×1 格、柜子 4×3 格……）与坑道 `shade` |
 | `Tiles` | 0 | 有（TileSet 物理层 0） | 地形，terrain set 名 `solid` |
 
-- 地形用 **terrain 笔刷**（不是单格笔刷）刷 `solid`：踏面 / 竖面 / 底面按邻居自动出，角部自动包边。碰撞永远是整格矩形，美术亮边只是画，不用为它对位。
+- 地形用 **terrain 笔刷**（不是单格笔刷）刷 `solid`：踏面 / 竖面 / 底面按邻居自动出，角部自动包边。碰撞永远是整格矩形，美术描边只是画，不用为它对位。
 - **坑**：坑的格子不刷地形；`WallFill` 照常铺满，再在 `Decor` 层给坑的格子刷 `shade`（半透明压暗）—— 坑读作「比地面暗一档的洞」。坑底那格刷地形，踏面自动出。
 - **最小可通行缝隙在瓦片世界 = 48 px（3 格）**：16 的格刷不出 40，§8 第 4 条按 48 执行。其余 §8 约束（台阶 ≤32、缺口 ≤160、坑深 ≤96）不变。
 - 悬空平台刷一行格子即可：上下左右四面会自动收边（踏面 + 底面 + 两端竖面）。
-- 改图集的管线（一般用不到，改风格才碰）：`py tools/gen_tiles.py` → `--import` → `--script res://tools/build_tileset.gd` → `tileset_selftest`。预览图 `assets/tiles/preview_room_ab.png` 是从图集逐格拼的，和引擎同一条合成路径，所见即所得。
+- **风格是数据不是代码**：`tools/gen_tiles.py` 顶部 `STYLES` 存九套（`ab` / `a` / `b` / `c` / `d` / `e` / `f` / `g` / `g2`），`SHIPPED` 一个常量决定哪套落盘成图集。当前实装 **`g`（暗底夜光，D26）**；**`d`（糖果贴纸）已定给后面的关卡**，到时候改一个常量重跑管线即可，九套的预览图每次都会重出，选型不用重新画。
+- 改图集的管线（一般用不到，改风格才碰）：`py tools/gen_tiles.py` → `--import` → `--script res://tools/build_tileset.gd` → `tileset_selftest`。预览图 `assets/tiles/preview_room_g.png` 是从图集逐格拼的，和引擎同一条合成路径，所见即所得；生成器每次跑还会打印一张九套风格的 WCAG 对比表（主角 silhouette 对墙低于 4.5 会标出来，D26 第 8 条）。
