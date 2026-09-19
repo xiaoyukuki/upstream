@@ -2,22 +2,18 @@
 
 [ext_resource type="Script" uid="uid://vgkpoksfv7jo" path="res://scenes/levels/level_template.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/objects/platform/platform.tscn" id="2"]
-[ext_resource type="PackedScene" path="res://scenes/actors/player/player.tscn" id="3"]
+[ext_resource type="PackedScene" uid="uid://mrc12mewuqnm" path="res://scenes/actors/player/player.tscn" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/objects/sensor_zone/sensor_zone.tscn" id="4"]
 [ext_resource type="PackedScene" path="res://scenes/objects/ability_altar/ability_altar.tscn" id="5_ulyey"]
-[ext_resource type="PackedScene" path="res://scenes/objects/button_plate/button_plate.tscn" id="6_j81xe"]
+[ext_resource type="PackedScene" uid="uid://bsdanerrbebbj" path="res://scenes/objects/button_plate/button_plate.tscn" id="6_j81xe"]
 [ext_resource type="PackedScene" path="res://scenes/objects/door/door.tscn" id="7_qvykx"]
-[ext_resource type="TileSet" path="res://assets/tiles/lab_tileset.tres" id="8_tiles"]
+[ext_resource type="TileSet" uid="uid://c7q30ygg6lk5r" path="res://assets/tiles/lab_tileset.tres" id="8_tiles"]
 
 [node name="LevelTemplate" type="Node2D" unique_id=2142175897]
 script = ExtResource("1")
 camera_limits = Rect2(0, -352, 1280, 480)
 
 [node name="Terrain" type="Node2D" parent="." unique_id=216216821]
-
-[node name="Floor2" parent="Terrain" unique_id=1853007414 instance=ExtResource("2")]
-position = Vector2(1, -126)
-size = Vector2(1280, 32)
 
 [node name="Floor" parent="Terrain" unique_id=366903165 instance=ExtResource("2")]
 size = Vector2(1280, 32)

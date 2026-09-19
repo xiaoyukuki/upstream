@@ -1,34 +1,35 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene format=3 uid="uid://mrc12mewuqnm"]
 
 [ext_resource type="Script" uid="uid://cs18jek0ro0qr" path="res://scenes/actors/player/player.gd" id="1"]
 [ext_resource type="Script" uid="uid://co77joc41jalb" path="res://scenes/actors/player/movement_input_handler.gd" id="2"]
 [ext_resource type="Script" uid="uid://dr03xxwj2u87l" path="res://scenes/actors/player/player_camera.gd" id="3"]
-[ext_resource type="Script" path="res://scenes/actors/player/player_visual.gd" id="4"]
-[ext_resource type="Resource" path="res://assets/player/slime_frames.tres" id="5"]
+[ext_resource type="Script" uid="uid://dv4maxmr73d44" path="res://scenes/actors/player/player_visual.gd" id="4"]
+[ext_resource type="SpriteFrames" uid="uid://bdedg6kh8ccy8" path="res://assets/player/slime_frames.tres" id="5"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
 size = Vector2(20, 30)
 
-[node name="Player" type="CharacterBody2D"]
+[node name="Player" type="CharacterBody2D" unique_id=2051597370]
 collision_layer = 2
 collision_mask = 5
 script = ExtResource("1")
 
-[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=744064484]
 shape = SubResource("RectangleShape2D_body")
 
-[node name="Visual" type="Node2D" parent="."]
+[node name="Visual" type="Node2D" parent="." unique_id=2092750082]
 
-[node name="Sprite" type="AnimatedSprite2D" parent="Visual"]
+[node name="Sprite" type="AnimatedSprite2D" parent="Visual" unique_id=806091410]
 sprite_frames = ExtResource("5")
-autoplay = &"idle"
+autoplay = "idle"
 script = ExtResource("4")
 
-[node name="MovementInputHandler" type="Node" parent="."]
+[node name="MovementInputHandler" type="Node" parent="." unique_id=1613813968]
 script = ExtResource("2")
 
-[node name="PlayerCamera" type="Camera2D" parent="."]
+[node name="PlayerCamera" type="Camera2D" parent="." unique_id=1053137506]
 zoom = Vector2(2, 2)
+limit_enabled = false
 limit_left = -96
 limit_top = 64
 limit_right = 2496
