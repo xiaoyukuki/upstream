@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://co77joc41jalb" path="res://scenes/actors/player/movement_input_handler.gd" id="2"]
 [ext_resource type="Script" uid="uid://dr03xxwj2u87l" path="res://scenes/actors/player/player_camera.gd" id="3"]
 [ext_resource type="Script" uid="uid://dv4maxmr73d44" path="res://scenes/actors/player/player_visual.gd" id="4"]
-[ext_resource type="SpriteFrames" uid="uid://bdedg6kh8ccy8" path="res://assets/player/slime_frames.tres" id="5"]
+[ext_resource type="SpriteFrames" uid="uid://bbsendn8bjwwo" path="res://assets/player/slime_frames.tres" id="5"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
 size = Vector2(20, 30)
