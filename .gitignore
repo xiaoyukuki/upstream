@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Python（tools/ 下的生成器与预览脚本）
+__pycache__/
+*.pyc
