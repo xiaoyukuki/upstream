@@ -47,6 +47,7 @@ CLIPS = {
     "start": {"loop": False, "fps": 16.0},
     "stop": {"loop": False, "fps": 16.0},
     "jump": {"loop": False, "fps": 12.0},
+    "jump_straight": {"loop": False, "fps": 12.0},
     "fall": {"loop": True, "fps": 8.0},
     "land": {"loop": False, "fps": 22.0},
     "crouch_in": {"loop": False, "fps": 16.0},
@@ -252,6 +253,14 @@ FRAMES = {
         dict(w=23, h=30, flare=0.80, dome=1.06, lean=1.0, dome_lean=1.5, eye_dy=0.8,
              mouth="open", nubs=(0, 0)),
     ],
+    # 原地起跳：水平动量为零，所以整团不许往前甩（lean / dome_lean 直接归零 —— 不保留
+    # 「一点点」，原地跳看得出倾斜就等于告诉玩家他在横移，而这一本作里「有没有横移」
+    # 恰好等于「世界冻没冻」，这条读法不能糊）。拉伸全交给更窄 + 更收的底裙。
+    # h 上限仍取 30 = 站姿盒顶，腾空美术不高出碰撞盒（D23 同一条契约）。
+    "jump_straight": [
+        dict(w=24, h=29, flare=0.84, dome=1.05, eye_dy=0.6, mouth="open", nubs=(0, 0)),
+        dict(w=22, h=30, flare=0.76, dome=1.07, eye_dy=0.8, mouth="open", nubs=(0, 0)),
+    ],
     "fall": [
         dict(w=30, h=22, flare=1.02, dome=1.02, dome_lean=-1.0, eye_dy=-0.4, nubs=(1, 0)),
         dict(w=31, h=19, flare=1.04, dome=1.04, dome_lean=-1.5, eye_dy=-0.8, mouth="open", nubs=(0, 1)),
@@ -347,7 +356,8 @@ def in_game_preview(out):
     贴墙压平有没有真的收进盒内。墙必须先画、帧后贴，否则墙会把越界的部分盖掉，预览就白做了。"""
     seq = [(c, i, False) for c, i in
            [("idle", i) for i in range(8)] + [("run", i) for i in range(6)]] + [
-        ("jump", 1, False), ("fall", 1, False), ("land", 0, False),
+        ("jump", 1, False), ("jump_straight", 0, False), ("jump_straight", 1, False),
+        ("fall", 1, False), ("land", 0, False),
         ("crouch_in", 2, False), ("crouch", 0, False), ("crouch_out", 0, False),
         ("wall_press_in", 0, True), ("wall_press_in", 1, True),
         ("wall_press", 0, True), ("wall_press", 1, True),
@@ -398,7 +408,8 @@ def anim_preview(out, scale=6):
     ground = (FRAME // 2 + 15) * scale  # local y=+15 所在的屏幕行
     wall_x = (FRAME // 2 + 10) * scale  # 碰撞盒右边界所在的屏幕列
     for clip in ("idle", "crouch_in", "crouch", "crouch_out", "start", "run", "stop",
-                 "wall_press_in", "wall_press", "wall_press_out", "jump", "fall", "land"):
+                 "wall_press_in", "wall_press", "wall_press_out", "jump", "jump_straight",
+                 "fall", "land"):
         walled = clip.startswith("wall_press")
         for i in range(len(FRAMES[clip])):
             frame = Image.new("RGB", (FRAME * scale, FRAME * scale), CLEAR)

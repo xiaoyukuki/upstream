@@ -29,6 +29,11 @@
   "frames": 2,
   "loop": false
  },
+ "jump_straight": {
+  "fps": 12.0,
+  "frames": 2,
+  "loop": false
+ },
  "land": {
   "fps": 22.0,
   "frames": 4,

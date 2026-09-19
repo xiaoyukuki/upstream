@@ -1,64 +1,66 @@
-[gd_resource type="SpriteFrames" format=3 uid="uid://bdedg6kh8ccy8"]
+[gd_resource type="SpriteFrames" format=3 uid="uid://bbsendn8bjwwo"]
 
-[ext_resource type="Texture2D" uid="uid://tmoyxi3uggw8" path="res://assets/player/slime/crouch_0.png" id="1_rlcl8"]
-[ext_resource type="Texture2D" uid="uid://cnib81m6bfbgx" path="res://assets/player/slime/crouch_1.png" id="2_i0xws"]
-[ext_resource type="Texture2D" uid="uid://cnf765uftxell" path="res://assets/player/slime/crouch_2.png" id="3_fk0s1"]
-[ext_resource type="Texture2D" uid="uid://dnp4qrvjq0kw3" path="res://assets/player/slime/crouch_3.png" id="4_4kwac"]
-[ext_resource type="Texture2D" uid="uid://b7knan57mltp6" path="res://assets/player/slime/crouch_in_0.png" id="5_20lmt"]
-[ext_resource type="Texture2D" uid="uid://68myxnjb5yqp" path="res://assets/player/slime/crouch_in_1.png" id="6_witpd"]
-[ext_resource type="Texture2D" uid="uid://cpo3q7is8i72n" path="res://assets/player/slime/crouch_in_2.png" id="7_ggqxt"]
-[ext_resource type="Texture2D" uid="uid://wapoliv1tie8" path="res://assets/player/slime/crouch_out_0.png" id="8_1n6ri"]
-[ext_resource type="Texture2D" uid="uid://c3o81qvucso0t" path="res://assets/player/slime/crouch_out_1.png" id="9_drkr8"]
-[ext_resource type="Texture2D" uid="uid://b784y6rystby2" path="res://assets/player/slime/fall_0.png" id="10_0eclr"]
-[ext_resource type="Texture2D" uid="uid://cmtntbm07yf8d" path="res://assets/player/slime/fall_1.png" id="11_4v8v0"]
-[ext_resource type="Texture2D" uid="uid://bhm6dxmhue6ox" path="res://assets/player/slime/fall_2.png" id="12_lo2pf"]
-[ext_resource type="Texture2D" uid="uid://dicjhitojtomu" path="res://assets/player/slime/idle_0.png" id="13_gxuhn"]
-[ext_resource type="Texture2D" uid="uid://4nwlifmgyrai" path="res://assets/player/slime/idle_1.png" id="14_7fn1b"]
-[ext_resource type="Texture2D" uid="uid://6qdantnpwxn8" path="res://assets/player/slime/idle_2.png" id="15_dql5c"]
-[ext_resource type="Texture2D" uid="uid://blmbi74v4nhs1" path="res://assets/player/slime/idle_3.png" id="16_1lid5"]
-[ext_resource type="Texture2D" uid="uid://tp2atmlnbovs" path="res://assets/player/slime/idle_4.png" id="17_m1qnw"]
-[ext_resource type="Texture2D" uid="uid://bjn5j1s0g4g58" path="res://assets/player/slime/idle_5.png" id="18_6lkrt"]
-[ext_resource type="Texture2D" uid="uid://cck7w6rb8tpn4" path="res://assets/player/slime/idle_6.png" id="19_qw15e"]
-[ext_resource type="Texture2D" uid="uid://c6amr8r2mnr4t" path="res://assets/player/slime/idle_7.png" id="20_vtv2w"]
-[ext_resource type="Texture2D" uid="uid://d04e1t8ns0uio" path="res://assets/player/slime/jump_0.png" id="21_avq8f"]
-[ext_resource type="Texture2D" uid="uid://cepner5grw4n2" path="res://assets/player/slime/jump_1.png" id="22_usbkf"]
-[ext_resource type="Texture2D" uid="uid://ba1ga8entwuk5" path="res://assets/player/slime/land_0.png" id="23_c8xtp"]
-[ext_resource type="Texture2D" uid="uid://b2tasyknramie" path="res://assets/player/slime/land_1.png" id="24_2hr66"]
-[ext_resource type="Texture2D" uid="uid://d0ick4lsv06xm" path="res://assets/player/slime/land_2.png" id="25_nbgkv"]
-[ext_resource type="Texture2D" uid="uid://gtv02nb7kstx" path="res://assets/player/slime/land_3.png" id="26_cdkaq"]
-[ext_resource type="Texture2D" uid="uid://ccaftv0rjpjx3" path="res://assets/player/slime/run_0.png" id="27_b5517"]
-[ext_resource type="Texture2D" uid="uid://b5s0clcf2asrq" path="res://assets/player/slime/run_1.png" id="28_c62tx"]
-[ext_resource type="Texture2D" uid="uid://2y0t7nsmo4uf" path="res://assets/player/slime/run_2.png" id="29_1ja0t"]
-[ext_resource type="Texture2D" uid="uid://vneogswrufyi" path="res://assets/player/slime/run_3.png" id="30_7c5l5"]
-[ext_resource type="Texture2D" uid="uid://5h8sqvhk481e" path="res://assets/player/slime/run_4.png" id="31_5pba7"]
-[ext_resource type="Texture2D" uid="uid://dj2aw0hpqu5n1" path="res://assets/player/slime/run_5.png" id="32_ih6s4"]
-[ext_resource type="Texture2D" uid="uid://dw0l0rox2o3nt" path="res://assets/player/slime/start_0.png" id="33_4oxpc"]
-[ext_resource type="Texture2D" uid="uid://bx5q1xct80yi2" path="res://assets/player/slime/start_1.png" id="34_b04te"]
-[ext_resource type="Texture2D" uid="uid://8rrhxo48rae7" path="res://assets/player/slime/start_2.png" id="35_c26yh"]
-[ext_resource type="Texture2D" uid="uid://c5jgfn7ve5mrf" path="res://assets/player/slime/stop_0.png" id="36_whent"]
-[ext_resource type="Texture2D" uid="uid://k4k3rfhf1o6s" path="res://assets/player/slime/stop_1.png" id="37_y4yr1"]
-[ext_resource type="Texture2D" uid="uid://c66t2ffyehqc0" path="res://assets/player/slime/stop_2.png" id="38_arpe3"]
-[ext_resource type="Texture2D" uid="uid://bcgmuse1rdwq" path="res://assets/player/slime/wall_press_0.png" id="39_fn6io"]
-[ext_resource type="Texture2D" uid="uid://djepslpbiqv5s" path="res://assets/player/slime/wall_press_1.png" id="40_2f081"]
-[ext_resource type="Texture2D" uid="uid://bn6uya2rg8ob2" path="res://assets/player/slime/wall_press_in_0.png" id="41_uqwa0"]
-[ext_resource type="Texture2D" uid="uid://bri37jcca5bpd" path="res://assets/player/slime/wall_press_in_1.png" id="42_c5ios"]
-[ext_resource type="Texture2D" uid="uid://d14e6h6fyewu4" path="res://assets/player/slime/wall_press_out_0.png" id="43_kx5ed"]
-[ext_resource type="Texture2D" uid="uid://dt6rhboph8jo7" path="res://assets/player/slime/wall_press_out_1.png" id="44_t572a"]
+[ext_resource type="Texture2D" uid="uid://tmoyxi3uggw8" path="res://assets/player/slime/crouch_0.png" id="1_fk0s1"]
+[ext_resource type="Texture2D" uid="uid://cnib81m6bfbgx" path="res://assets/player/slime/crouch_1.png" id="2_4kwac"]
+[ext_resource type="Texture2D" uid="uid://cnf765uftxell" path="res://assets/player/slime/crouch_2.png" id="3_20lmt"]
+[ext_resource type="Texture2D" uid="uid://dnp4qrvjq0kw3" path="res://assets/player/slime/crouch_3.png" id="4_witpd"]
+[ext_resource type="Texture2D" uid="uid://b7knan57mltp6" path="res://assets/player/slime/crouch_in_0.png" id="5_ggqxt"]
+[ext_resource type="Texture2D" uid="uid://68myxnjb5yqp" path="res://assets/player/slime/crouch_in_1.png" id="6_1n6ri"]
+[ext_resource type="Texture2D" uid="uid://cpo3q7is8i72n" path="res://assets/player/slime/crouch_in_2.png" id="7_drkr8"]
+[ext_resource type="Texture2D" uid="uid://wapoliv1tie8" path="res://assets/player/slime/crouch_out_0.png" id="8_0eclr"]
+[ext_resource type="Texture2D" uid="uid://c3o81qvucso0t" path="res://assets/player/slime/crouch_out_1.png" id="9_4v8v0"]
+[ext_resource type="Texture2D" uid="uid://b784y6rystby2" path="res://assets/player/slime/fall_0.png" id="10_lo2pf"]
+[ext_resource type="Texture2D" uid="uid://cmtntbm07yf8d" path="res://assets/player/slime/fall_1.png" id="11_gxuhn"]
+[ext_resource type="Texture2D" uid="uid://bhm6dxmhue6ox" path="res://assets/player/slime/fall_2.png" id="12_7fn1b"]
+[ext_resource type="Texture2D" uid="uid://dicjhitojtomu" path="res://assets/player/slime/idle_0.png" id="13_dql5c"]
+[ext_resource type="Texture2D" uid="uid://4nwlifmgyrai" path="res://assets/player/slime/idle_1.png" id="14_1lid5"]
+[ext_resource type="Texture2D" uid="uid://6qdantnpwxn8" path="res://assets/player/slime/idle_2.png" id="15_m1qnw"]
+[ext_resource type="Texture2D" uid="uid://blmbi74v4nhs1" path="res://assets/player/slime/idle_3.png" id="16_6lkrt"]
+[ext_resource type="Texture2D" uid="uid://tp2atmlnbovs" path="res://assets/player/slime/idle_4.png" id="17_qw15e"]
+[ext_resource type="Texture2D" uid="uid://bjn5j1s0g4g58" path="res://assets/player/slime/idle_5.png" id="18_vtv2w"]
+[ext_resource type="Texture2D" uid="uid://cck7w6rb8tpn4" path="res://assets/player/slime/idle_6.png" id="19_avq8f"]
+[ext_resource type="Texture2D" uid="uid://c6amr8r2mnr4t" path="res://assets/player/slime/idle_7.png" id="20_usbkf"]
+[ext_resource type="Texture2D" uid="uid://d04e1t8ns0uio" path="res://assets/player/slime/jump_0.png" id="21_c8xtp"]
+[ext_resource type="Texture2D" uid="uid://cepner5grw4n2" path="res://assets/player/slime/jump_1.png" id="22_2hr66"]
+[ext_resource type="Texture2D" uid="uid://d1kxru6yivh6v" path="res://assets/player/slime/jump_straight_0.png" id="23_nbgkv"]
+[ext_resource type="Texture2D" uid="uid://bpt41a5f2w20e" path="res://assets/player/slime/jump_straight_1.png" id="24_cdkaq"]
+[ext_resource type="Texture2D" uid="uid://ba1ga8entwuk5" path="res://assets/player/slime/land_0.png" id="25_b5517"]
+[ext_resource type="Texture2D" uid="uid://b2tasyknramie" path="res://assets/player/slime/land_1.png" id="26_c62tx"]
+[ext_resource type="Texture2D" uid="uid://d0ick4lsv06xm" path="res://assets/player/slime/land_2.png" id="27_1ja0t"]
+[ext_resource type="Texture2D" uid="uid://gtv02nb7kstx" path="res://assets/player/slime/land_3.png" id="28_7c5l5"]
+[ext_resource type="Texture2D" uid="uid://ccaftv0rjpjx3" path="res://assets/player/slime/run_0.png" id="29_5pba7"]
+[ext_resource type="Texture2D" uid="uid://b5s0clcf2asrq" path="res://assets/player/slime/run_1.png" id="30_ih6s4"]
+[ext_resource type="Texture2D" uid="uid://2y0t7nsmo4uf" path="res://assets/player/slime/run_2.png" id="31_4oxpc"]
+[ext_resource type="Texture2D" uid="uid://vneogswrufyi" path="res://assets/player/slime/run_3.png" id="32_b04te"]
+[ext_resource type="Texture2D" uid="uid://5h8sqvhk481e" path="res://assets/player/slime/run_4.png" id="33_c26yh"]
+[ext_resource type="Texture2D" uid="uid://dj2aw0hpqu5n1" path="res://assets/player/slime/run_5.png" id="34_whent"]
+[ext_resource type="Texture2D" uid="uid://dw0l0rox2o3nt" path="res://assets/player/slime/start_0.png" id="35_y4yr1"]
+[ext_resource type="Texture2D" uid="uid://bx5q1xct80yi2" path="res://assets/player/slime/start_1.png" id="36_arpe3"]
+[ext_resource type="Texture2D" uid="uid://8rrhxo48rae7" path="res://assets/player/slime/start_2.png" id="37_fn6io"]
+[ext_resource type="Texture2D" uid="uid://c5jgfn7ve5mrf" path="res://assets/player/slime/stop_0.png" id="38_2f081"]
+[ext_resource type="Texture2D" uid="uid://k4k3rfhf1o6s" path="res://assets/player/slime/stop_1.png" id="39_uqwa0"]
+[ext_resource type="Texture2D" uid="uid://c66t2ffyehqc0" path="res://assets/player/slime/stop_2.png" id="40_c5ios"]
+[ext_resource type="Texture2D" uid="uid://bcgmuse1rdwq" path="res://assets/player/slime/wall_press_0.png" id="41_kx5ed"]
+[ext_resource type="Texture2D" uid="uid://djepslpbiqv5s" path="res://assets/player/slime/wall_press_1.png" id="42_t572a"]
+[ext_resource type="Texture2D" uid="uid://bn6uya2rg8ob2" path="res://assets/player/slime/wall_press_in_0.png" id="43_h0tlq"]
+[ext_resource type="Texture2D" uid="uid://bri37jcca5bpd" path="res://assets/player/slime/wall_press_in_1.png" id="44_hijiy"]
+[ext_resource type="Texture2D" uid="uid://d14e6h6fyewu4" path="res://assets/player/slime/wall_press_out_0.png" id="45_t58iu"]
+[ext_resource type="Texture2D" uid="uid://dt6rhboph8jo7" path="res://assets/player/slime/wall_press_out_1.png" id="46_m36gs"]
 
 [resource]
 animations = [{
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("1_rlcl8")
+"texture": ExtResource("1_fk0s1")
 }, {
 "duration": 1.0,
-"texture": ExtResource("2_i0xws")
+"texture": ExtResource("2_4kwac")
 }, {
 "duration": 1.0,
-"texture": ExtResource("3_fk0s1")
+"texture": ExtResource("3_20lmt")
 }, {
 "duration": 1.0,
-"texture": ExtResource("4_4kwac")
+"texture": ExtResource("4_witpd")
 }],
 "loop": true,
 "name": &"crouch",
@@ -66,13 +68,13 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("5_20lmt")
+"texture": ExtResource("5_ggqxt")
 }, {
 "duration": 1.0,
-"texture": ExtResource("6_witpd")
+"texture": ExtResource("6_1n6ri")
 }, {
 "duration": 1.0,
-"texture": ExtResource("7_ggqxt")
+"texture": ExtResource("7_drkr8")
 }],
 "loop": false,
 "name": &"crouch_in",
@@ -80,10 +82,10 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("8_1n6ri")
+"texture": ExtResource("8_0eclr")
 }, {
 "duration": 1.0,
-"texture": ExtResource("9_drkr8")
+"texture": ExtResource("9_4v8v0")
 }],
 "loop": false,
 "name": &"crouch_out",
@@ -96,13 +98,13 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("10_0eclr")
+"texture": ExtResource("10_lo2pf")
 }, {
 "duration": 1.0,
-"texture": ExtResource("11_4v8v0")
+"texture": ExtResource("11_gxuhn")
 }, {
 "duration": 1.0,
-"texture": ExtResource("12_lo2pf")
+"texture": ExtResource("12_7fn1b")
 }],
 "loop": true,
 "name": &"fall",
@@ -110,28 +112,28 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("13_gxuhn")
+"texture": ExtResource("13_dql5c")
 }, {
 "duration": 1.0,
-"texture": ExtResource("14_7fn1b")
+"texture": ExtResource("14_1lid5")
 }, {
 "duration": 1.0,
-"texture": ExtResource("15_dql5c")
+"texture": ExtResource("15_m1qnw")
 }, {
 "duration": 1.0,
-"texture": ExtResource("16_1lid5")
+"texture": ExtResource("16_6lkrt")
 }, {
 "duration": 1.0,
-"texture": ExtResource("17_m1qnw")
+"texture": ExtResource("17_qw15e")
 }, {
 "duration": 1.0,
-"texture": ExtResource("18_6lkrt")
+"texture": ExtResource("18_vtv2w")
 }, {
 "duration": 1.0,
-"texture": ExtResource("19_qw15e")
+"texture": ExtResource("19_avq8f")
 }, {
 "duration": 1.0,
-"texture": ExtResource("20_vtv2w")
+"texture": ExtResource("20_usbkf")
 }],
 "loop": true,
 "name": &"idle",
@@ -139,10 +141,10 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("21_avq8f")
+"texture": ExtResource("21_c8xtp")
 }, {
 "duration": 1.0,
-"texture": ExtResource("22_usbkf")
+"texture": ExtResource("22_2hr66")
 }],
 "loop": false,
 "name": &"jump",
@@ -150,16 +152,27 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("23_c8xtp")
+"texture": ExtResource("23_nbgkv")
 }, {
 "duration": 1.0,
-"texture": ExtResource("24_2hr66")
+"texture": ExtResource("24_cdkaq")
+}],
+"loop": false,
+"name": &"jump_straight",
+"speed": 12.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("25_b5517")
 }, {
 "duration": 1.0,
-"texture": ExtResource("25_nbgkv")
+"texture": ExtResource("26_c62tx")
 }, {
 "duration": 1.0,
-"texture": ExtResource("26_cdkaq")
+"texture": ExtResource("27_1ja0t")
+}, {
+"duration": 1.0,
+"texture": ExtResource("28_7c5l5")
 }],
 "loop": false,
 "name": &"land",
@@ -167,22 +180,22 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("27_b5517")
+"texture": ExtResource("29_5pba7")
 }, {
 "duration": 1.0,
-"texture": ExtResource("28_c62tx")
+"texture": ExtResource("30_ih6s4")
 }, {
 "duration": 1.0,
-"texture": ExtResource("29_1ja0t")
+"texture": ExtResource("31_4oxpc")
 }, {
 "duration": 1.0,
-"texture": ExtResource("30_7c5l5")
+"texture": ExtResource("32_b04te")
 }, {
 "duration": 1.0,
-"texture": ExtResource("31_5pba7")
+"texture": ExtResource("33_c26yh")
 }, {
 "duration": 1.0,
-"texture": ExtResource("32_ih6s4")
+"texture": ExtResource("34_whent")
 }],
 "loop": true,
 "name": &"run",
@@ -190,13 +203,13 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("33_4oxpc")
+"texture": ExtResource("35_y4yr1")
 }, {
 "duration": 1.0,
-"texture": ExtResource("34_b04te")
+"texture": ExtResource("36_arpe3")
 }, {
 "duration": 1.0,
-"texture": ExtResource("35_c26yh")
+"texture": ExtResource("37_fn6io")
 }],
 "loop": false,
 "name": &"start",
@@ -204,13 +217,13 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("36_whent")
+"texture": ExtResource("38_2f081")
 }, {
 "duration": 1.0,
-"texture": ExtResource("37_y4yr1")
+"texture": ExtResource("39_uqwa0")
 }, {
 "duration": 1.0,
-"texture": ExtResource("38_arpe3")
+"texture": ExtResource("40_c5ios")
 }],
 "loop": false,
 "name": &"stop",
@@ -218,10 +231,10 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("39_fn6io")
+"texture": ExtResource("41_kx5ed")
 }, {
 "duration": 1.0,
-"texture": ExtResource("40_2f081")
+"texture": ExtResource("42_t572a")
 }],
 "loop": true,
 "name": &"wall_press",
@@ -229,10 +242,10 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("41_uqwa0")
+"texture": ExtResource("43_h0tlq")
 }, {
 "duration": 1.0,
-"texture": ExtResource("42_c5ios")
+"texture": ExtResource("44_hijiy")
 }],
 "loop": false,
 "name": &"wall_press_in",
@@ -240,10 +253,10 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
-"texture": ExtResource("43_kx5ed")
+"texture": ExtResource("45_t58iu")
 }, {
 "duration": 1.0,
-"texture": ExtResource("44_t572a")
+"texture": ExtResource("46_m36gs")
 }],
 "loop": false,
 "name": &"wall_press_out",
