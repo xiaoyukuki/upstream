@@ -337,10 +337,10 @@ TimeManager (autoload)      _physics_process, priority = -100
 | `time_manager.gd` | Autoload（无 `class_name`） | 时停状态机 + 缓冲 + 门控 + 双通道 delta | `state_changed`、`current_state`、`is_releasing()`、`get_physics_delta()`、`get_process_delta()`、`get_time_scale()`、`notify_movement_intent(bool)`、`set_ability_enabled(bool)`、`reset_state()` | 不读输入（交给 Handler）；不碰 `Engine.time_scale`；不管视觉 |
 | `time_receiver.gd` | `class_name TimeReceiver extends Node` | 单个对象的时间源代理 | `get_physics_delta()`、`get_process_delta()`、`set_time_source(Callable)`、`time_source_changed` | 不含任何游戏逻辑；`_ready()` 加入 `time_receiver` 分组 |
 | `movement_input_handler.gd` | `class_name ... extends Node` | 读原始水平轴、死区、边沿检测 | `movement_started`、`movement_stopped`、`raw_axis`、`@export freeze_deadzone` | 不做加速度平滑（D3）；不监听垂直输入；不改玩家速度 |
-| `player.gd` | `class_name Player extends CharacterBody2D` | 平台跳跃手感 | `respawn()`、`landed`、`jumped`、`@export` 手感参数组 | 不查 `TimeManager`（永久豁免）；不管能力解锁 |
+| `player.gd` | `class_name Player extends CharacterBody2D` | 平台跳跃手感 | `respawn()`、`landed`、`jumped`、`movement_locked`（D41）、`@export` 手感参数组 | 不查 `TimeManager`（永久豁免）；不管能力解锁；`movement_locked` 只掐水平输入与起跳，不掐冻结意图 |
 | `player_camera.gd` | `class_name PlayerCamera extends Camera2D` | 跟随 + 平滑 + 前瞻 + limits | `@export` 平滑/前瞻/limits | 不查 `TimeManager` |
-| `main.gd` | `class_name Main extends Node` | 关卡换入换出、R 键重开关卡、暂停协调 | `load_level(path)`、`restart_level()` | 不含谜题逻辑 |
-| `level_base.gd` | `class_name LevelBase extends Node2D` | 关卡基类 | `_ready()` 调 `TimeManager.reset_state()`、记录出生点 | — |
+| `main.gd` | `class_name Main extends Node` | 关卡换入换出、R 键重开、死亡重载、`run_state` 持有（D31 同关内粘性状态）、暂停协调 | `load_level(path)`、`restart_level()`、`reload_level()`、`get_run_state()` | 不含谜题逻辑 |
+| `level_base.gd` | `class_name LevelBase extends Node2D` | 关卡基类：编排下沉（D28 祭坛/终点）+ 危险物/存档点自动接线（D38）+ `run_state` 回灌与死亡重载（D31） | `restart_level()`、`_begin_ability_sequence()` / `_on_ability_enabled()` 覆写钩子 | 不含谜题逻辑 |
 | `button_plate.gd` | `class_name ButtonPlate extends Area2D` | 踩踏检测 + FROZEN 期间延迟松开 | `pressed_changed(bool)`、`pending_unpress` | 不直接操作门（发信号，关卡/门自己连） |
 | `door.gd` | `class_name Door extends StaticBody2D` | 升降 + 时停冻结动画帧 | `set_open(bool)`、`speed_scale` 门控 | 不用 Tween（原文明令禁止）；不用 `seek()` |
 | `pendulum.gd` | `class_name Pendulum extends Node2D` | 正弦摆动，累加相位 | `@export period/amplitude` | 无碰撞体（D7） |
@@ -348,6 +348,13 @@ TimeManager (autoload)      _physics_process, priority = -100
 | `ability_altar.gd` | `class_name AbilityAltar extends Area2D` | 一次性触发能力授予演出 | `ability_granted` | 不直接改 `TimeManager`（发信号由关卡编排） |
 | `time_freeze_filter.gd` | `class_name ... extends CanvasLayer` | 灰度反馈视觉 | 订阅 `state_changed` | 不判定状态；`mouse_filter = IGNORE` |
 | `debug_overlay.gd` | `class_name ... extends CanvasLayer` | 开发期诊断 | 枚举 `time_receiver` 分组 | 仅 `OS.is_debug_build()` 可见 |
+| `hazard_base.gd` | `class_name HazardBase extends Area2D` | 危险物基类：每物理帧扫描重叠、接触即判 | `touched_player(player)`、`is_live()` | 接触判定不吃世界 delta（D38）；不决定「死」（发信号，LevelBase 接）；不做视觉 |
+| `spikes.gd` | `class_name Spikes extends HazardBase` | 常开尖刺地形，判死盒只罩画出来的牙 | `length` | 无相位、不挡路；贴顶倒刺 = rotation 180，不吃代码 |
+| `electric_bar.gd` | `class_name ElectricBar extends HazardBase` | 周期通断电棒，相位为世界时间的纯函数 | `length`、`period`、`duty`、`phase`、`blocks_when_live` | 相位钟走 TimeReceiver（D35）；不做来回滑动的电（§8） |
+| `key_pickup.gd` | `class_name KeyPickup extends Area2D` | 一次性能量卡，拾取后画成含在玩家体内（D39）；被门取走时向上飞出并淡化（D41） | `held`、`is_held()`、`consume(fly_time)`、`fly_progress()` | 不 re-parent 到玩家（跟随走豁免通道，D30 第 4 条）；飞出**计时**走固定物理步长与门同一条钟（D41）；不进 run_state |
+| `key_door.gd` | `class_name KeyDoor extends StaticBody2D` | 刷卡门：读卡 → 锁住玩家移动 → 光幕自上而下逐行熄灭一拍 → 演完才让行并解锁（D41） | `key`、`swipe_time`、`is_latched`、`curtain_rect()` | 不复用 `Door`（D36 结构差）；无关门方向，挤压类 bug 结构性消失；演出与扫描都不吃世界 delta（D40），不挂 `TimeReceiver` |
+| `checkpoint.gd` | `class_name Checkpoint extends Area2D` | 一次性存档点，踩上即存 | `checkpoint_reached(position)` | 不持有跨重载状态（run_state 住 Main，D31） |
+| `tile_draw.gd` | `class_name TileDraw extends RefCounted` | 零件 PNG 无缝平铺的公共画法 | 静态 `TileDraw.tile()` | 无状态、不进场景树 |
 
 ---
 
@@ -390,18 +397,46 @@ Player (CharacterBody2D)                       player.gd
 └── TimeReceiver (Node)                        time_receiver.gd
 ```
 
+M5 危险与推进构件（全部 @tool；受时停的只有电棒与刷卡门，其余三个无时间驱动过程，不挂 TimeReceiver）：
+
+```
+spikes.tscn
+Spikes (Area2D, layer 0 / mask 2)              spikes.gd
+└── CollisionShape2D (length × 14, 带心 -7)     ← 判死盒只罩画出来的牙
+
+electric_bar.tscn
+ElectricBar (Area2D, layer 0 / mask 2)         electric_bar.gd
+├── CollisionShape2D (length × 10, 带心 0)      ← 判死盒只罩光束带，极柱不咬人
+├── TimeReceiver (Node)                         ← 相位钟的门控 delta
+└── Blocker (StaticBody2D, layer 4 ↔ 0)        ← blocks_when_live 且通电才上层
+    └── BlockerShape ((length+20) × 18)
+
+key_pickup.tscn / checkpoint.tscn
+KeyPickup / Checkpoint (Area2D, layer 8 / mask 2)   ← 纯传感器，与按钮同族
+└── CollisionShape2D (32 × 24, 带心 -15)
+
+key_door.tscn
+KeyDoor (StaticBody2D, layer 4 / mask 0)       key_door.gd
+├── CollisionShape2D (width × height·(1-p))     ← 只缩不涨，初始全高
+├── TimeReceiver (Node)                         ← 消散进度的门控 delta
+└── Reader (Area2D, layer 0 / mask 2)           ← 读卡感应带 (width+2·reach × 40, 带心 -15)
+    └── ReaderShape
+```
+
 ---
 
 ## 6. 物理层、分组、约定
 
-**碰撞层**（第一章够用即可，不过度预留）：
+**碰撞层**（第一章够用即可，不过度预留；与手册 §4 同一张表，数值为位值）：
 
-| 层 | 名称 | 使用者 |
+| 位值 | 名称 | 使用者 |
 |---|---|---|
-| 1 | `terrain` | Platform、静态墙体 |
+| 1 | `terrain` | Platform、静态墙体、`Tiles` 层（TileSet 物理层 0） |
 | 2 | `player` | Player |
-| 3 | `time_solid` | MovingBlock、Door（受时停的实体） |
-| 4 | `sensor` | ButtonPlate、AbilityAltar 等 Area2D（`monitoring` 层 2） |
+| 4 | `time_solid` | MovingBlock、Door、KeyDoor、ElectricBar 的 Blocker（通电且 `blocks_when_live` 时） |
+| 8 | `sensor` | ButtonPlate、AbilityAltar、SensorZone、KeyPickup、Checkpoint（`monitoring` mask 2） |
+
+危险物判死区（Spikes / ElectricBar / KeyDoor 的 Reader）**不在任何层上**：`layer = 0`、`mask = 2`、`monitorable = false` —— 上 sensor 层会被玩家的起身净空查询读漏（D29 与 D27 交叉核对）。Player `mask = 5`（terrain + time_solid）。
 
 **分组**：
 - `time_receiver` — 所有 `TimeReceiver` 在 `_ready()` 自注册，`DebugOverlay` 枚举它
@@ -409,7 +444,7 @@ Player (CharacterBody2D)                       player.gd
 
 **节点/文件命名**：目录与文件 snake_case，`class_name` PascalCase，autoload 单例不写 `class_name`（D10）。
 
-**占位视觉**：全部 `Polygon2D` + 纯色，世界空间以左上角为原点、按 **32px 网格**摆放，便于灰盒阶段直接换算「5~6 个身位」这类布局要求（原文 3.3）。
+**视觉**：地形走瓦片图集（D26 风格 `g`），机关立绘走 `assets/props/` 零件 PNG 平铺（D25，`tools/gen_props.py` 出）；世界空间以左上角为原点、按 **32px 网格**摆放，便于灰盒阶段直接换算「5~6 个身位」这类布局要求（原文 3.3）。
 
 ---
 
@@ -450,6 +485,16 @@ Player (CharacterBody2D)                       player.gd
 ### M4 · 第一章扩展
 **交付**：3~5 个谜题关 + `GameManager` autoload（关卡进度/能力持久化）——**此单例在第一章前三个里程碑都不需要**，避免过早抽象。
 **阻塞项**：D11 两处矛盾需先解决。
+
+### M5 · 危险与推进（D32 立项，2026-09-20 实装）
+**交付**：`hazard_base.gd`、`spikes/`、`electric_bar/`、`key_pickup/`、`key_door/`、`checkpoint/`（5 个 tscn、6 个脚本，D36 范围订正后）、`components/tile_draw.gd`、`Main.run_state` + `LevelBase` 回灌与死亡重载、`tools/gen_props.py` 危险物/钥匙/存档点零件（选型图 `preview_m5.png`）、`verify_kit` / `kit_selftest` 扩充
+**验收挂钩**：
+- 「冻住的通电棒仍伤人」→ D38 接触即判：kit_selftest 冻结中把玩家传进恒通电棒，`touched_player` 恰发一次
+- 「玩家移动期间相位一分不动」→ D35：相位钟走 TimeReceiver 门控 delta，冻结即钉住
+- 「复活失去并重置钥匙」→ D30/D31：钥匙状态住在 KeyPickup 实例上，重载即归位，`run_state` 不存钥匙条目
+- 「重生后能力不丢、用过的祭坛不复活」→ run_state 回灌组断言：出生点换到存档点、`is_ability_enabled` 为真、祭坛 `mark_spent()` 只换装不重播演出
+**实现与 D31 的一处偏差**：`run_state` 实存两条 `{respawn_position, altar_spent}`，粘性表里的 `ability_granted` 不单独存 —— 能力开启由 `altar_spent` 推导。两个布尔若各自存一份，漂移（一真一假）会直接软锁，一份真相没有这个问题。
+**状态（2026-09-20）**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。另有一条实测订正：`--script` 模式下 autoload 在首帧 `_process` 已就位（旧注释「autoload 不一定在」是错的），电棒与刷卡门因此得以进 `verify_kit` 第二阶段的真树验派生几何。
 
 ---
 
@@ -1001,7 +1046,7 @@ Godot_console.exe --headless --path . res://tools/sprite_selftest.tscn   # 84 �
 1. **三段链条 `KeyPickup` → `KeyLock` → `Door.trigger`**。（**订正：本条已由 D36 推翻** —— 用户裁定刷卡门不与按钮门共用场景，`KeyLock` 并进独立的 `KeyDoor`，`Door.trigger` 这条路不走。第 2~8 条仍然成立，其中第 2 条「一生只发一次、从不发 false」的闩锁语义原样搬进 `KeyDoor`。）锁的逻辑全部集中在 `KeyLock`，~~**门保持笨、`trigger` 契约一字不改**~~（D20「门只认信号不认类型」在这里兑现；`verify_kit` 已经在验 `trigger` 指向的节点真的发 `pressed_changed`，接进去自带守门）。`KeyLock` 自身 = `SensorZone` 的感应带语义（同原点约定、带心 −15）+ 一个「持有钥匙才放行」的门控。
 2. **闩锁语义**：`KeyLock` 一生只发一次 `pressed_changed(true)`，**从不发 false**。门收到 true 之后不需要任何新语义 —— 开到头就停在那儿。
 3. **钥匙状态住在 `KeyPickup` 实例上（`held: bool`），不是 `Player` 的字段**。两个理由：其一，`Player` 不该长出背包；其二（更重要）——**实例状态在 D31 的重载模型里免费归位，正好就是用户要的「复活失去并重置钥匙」**，于是 `run_state` 里**不需要钥匙条目**，粘性状态从四条缩到三条。
-4. **身上那把钥匙 = `KeyPickup` 每帧把自己的可视位置跟到玩家头顶**，不 re-parent（`PlayerVisual` 带 `facing` 镜像与压扁缩放，子节点会跟着翻跟着扁）。跟随用 **real-time 而不是世界 delta**：冻结期间玩家会动，钥匙必须跟着动 —— 与「世界冻结时主角动画照常推进」同一条表现层规则。
+4. **身上那把钥匙 = `KeyPickup` 每帧把自己的可视位置跟到玩家~~头顶~~**（**订正：位置已由 D39 改到体内** —— 半透明的卡钉在脚底上方 3 px 的常量偏移上），不 re-parent（`PlayerVisual` 带 `facing` 镜像，子节点会跟着翻）。跟随用 **real-time 而不是世界 delta**：冻结期间玩家会动，钥匙必须跟着动 —— 与「世界冻结时主角动画照常推进」同一条表现层规则。
 5. **复活 = 全部归位**：门重新关上、钥匙重新出现在原处。这是裁定的直接推论，代价要说清 —— **钥匙门是死亡惩罚最重的关卡节点**（白跑一段去重取钥匙）。
 6. **死锁风险写进守门**：两个 `KeyLock` 指向同一把 `KeyPickup` → 第二扇门永久开不了。虽然死亡 / R 键重开能救，但正确处置是让 `verify_kit` **直接 FAIL**：一把 `KeyPickup` 最多被一个 `KeyLock` 引用。
 7. **可读性**：锁着的时候门楣 LED 用锁色、被钥匙解锁后转青。要碰 `props.json`（新增 `led_locked`）与 `verify_kit._verify_props()` 的同源比对（加一条），D25 第 6 条的契约因此扩一项。
@@ -1026,6 +1071,8 @@ Godot_console.exe --headless --path . res://tools/sprite_selftest.tscn   # 84 �
 4. **踩上即存**，不设确认窗口（存档是便利不是仪式），但反馈必须显式（灯 + 一次性色变），否则玩家不知道自己存了。
 5. 重生后全体机关相位归零 = **可以背板**。对时机谜题这是特性不是漏洞。
 6. **死亡不加演出、不复用灰滤镜** —— 去饱和是「冻结」的视觉语言，挪用成「死」会混淆两条语义。
+
+   **订正（D42，2026-09-21）**：两半都推翻了 —— 死亡现在有 0.55 s 的收缩 + 爆裂，且那一拍世界**确实**钉在冻结里，灰滤镜跟着上。但本条担心的"混淆两条语义"没有落空：滤镜不是被**借用**去表示"死"，它读到的是此刻**真的没有世界时间在走**（`TimeManager` 里仍然只有一个是真的 `current_state`）。本条真正在防的是"拿一套视觉符号演两件不相干的事"，D42 走的是另一头 —— 让两件事共享同一个物理事实。仍成立的半边：**不新增第三种全屏色调**，死亡不配独立的滤镜。
 
 ### D32 · 范围变更：新立 M5「危险与推进」
 
@@ -1162,15 +1209,15 @@ M5 交付：`hazard.tscn`（尖刺 / 电流棒两种参数）、`key_pickup.tscn
 4. **动画定稿：卷帘 vs 光幕。**
    - `Door`（保持现状）= 机械卷帘，从门楣**往下挂**、往上收，实体钢板 + 琥珀警示底边。
    - `KeyDoor` = **能量闸**，青色光场贴着地面**往上长**；刷卡之后**自上而下逐行熄灭**，最后死的是脚底那一行。它不移动、不缩回门楣，它是**失去供电**。
-   取带方向刻意相反：卷帘留出的缝在**下面**（等着把人挤住），光幕留出的缝在**上面**（只会越让越开）。
-5. **纯函数架构原样搬，只换一条算式。** `Door` 值钱的地方是「位置与碰撞体都是 `_progress` 的纯函数」，所以冻结即停在当前值、解冻即续走、且碰撞体永远 == 画出来的那截。`KeyDoor` 沿用同一套：`_progress` 由 `TimeReceiver.get_physics_delta()` 推进，卷帘取**上带** `Rect2(-w/2, -H, w, H·(1−p))`，光幕取**下带** `Rect2(-w/2, -H·(1−p), w, H·(1−p))`。碰撞随进度走，**不做「先失效、再播动画」** —— 那是「穿过去一道看得见的光」这种破绽的来源。
+   取带方向刻意相反：卷帘留出的缝在**下面**（等着把人挤住），光幕留出的缝在**上面**（只会越让越开）。**订正（D40，2026-09-20）：这条行程整块取消 —— 刷卡之后光幕当帧消失，不再有「逐行熄灭」那 0.5 s。幕体的画法（第 7 条）一字未改，改的是它有没有中间态。**
+5. **纯函数架构原样搬，只换一条算式。** `Door` 值钱的地方是「位置与碰撞体都是 `_progress` 的纯函数」，所以冻结即停在当前值、解冻即续走、且碰撞体永远 == 画出来的那截。`KeyDoor` 沿用同一套：`_progress` 由 `TimeReceiver.get_physics_delta()` 推进，卷帘取**上带** `Rect2(-w/2, -H, w, H·(1−p))`，光幕取**下带** `Rect2(-w/2, -H·(1−p), w, H·(1−p))`。碰撞随进度走，**不做「先失效、再播动画」** —— 那是「穿过去一道看得见的光」这种破绽的来源。**订正（D40，2026-09-20）：`KeyDoor` 身上已经没有 `_progress`，也没有 `TimeReceiver` 子节点，取带算式塌成 `height / OPEN_H` 两态（唯一真值来源 `_curtain_height()`）。这条真正留下的两条约束反而更硬：碰撞体 == 画出来的（都从同一个高度派生），以及「不做先失效再播动画」（压根没有动画）。卷帘那条上带算式仍归 `Door`，一字未动。**
 6. **守门重排三条**：(a) D30 第 6 条那条死锁检查改指 `KeyDoor` —— 一把 `KeyPickup` 最多被一个 `KeyDoor` 引用，多引直接 FAIL；(b) 现在 `verify_kit` 只按路径认 `door.gd` 来验「碰撞体 == 画出来的」，`KeyDoor` 得进同一个检查，否则将来谁改一边不会响；(c) `led_locked` 那条调色板同源比对照 D30 第 7 条留在 `props.json`，宿主从 `Door` 换成 `KeyDoor`。
 7. **零件是复用的，场景不是。** 门柱 / 门楣 / 端帽三件照用 `assets/props/` 现有零件（同一套 `ab` 钢框，读作「这是一道门洞」），卷帘板与警示底边**不用**。**幕体本身是纯色半透明青，不画纹路** —— 第一版复用了 D34 电棒那支折线波动（竖直光丝 + 暗描边），用户看过图原话：「门里的纹路好丑，我觉得单纯蓝色光幕就可以了」。半透明是这条反馈的必要配套：背后的墙透得出来才读成「光」，平涂不透明就又成了一块门板。定稿画法 = 一层 `accent` 半透明幕 + 左右两条亮收边 + 外侧一像素光晕 + 顶端一条「断电前沿」亮行（**这条反馈也说明：`paint_beam` 那套纹路只属于电棒，别顺手挪到别处**）。净新增 = **零张新零件 + 一个 `led_locked` 色**。D34 记的那条「门楣警示条与 K2 琥珀同色」的顾虑，在刷卡门上反过来是加分项：锁着的 LED 用琥珀 = 与钥匙同色 = 「这把开那扇」是一对，同色在这里是语义而不是撞车。
 8. **不抽 `DoorBase`。** 这与 D34 给危险物抽 `HazardBase` 相反，理由是实的：两个危险物共享**状态与规则**（受击判定、`is_live` 相位、同一套死亡路径），两个门共享的只有**画法常量和一条原点约定**。为后者建基类，等于把用户要求分开的两样东西在「同一棵树」这个层面又合回去，而且将来 `Door` 任何行程特性（半开、保持开、挤压）都会落到基类里让光幕白背一份。**门框平铺那 6 行复制一份，第三处用到再抽。**
-9. **消散用世界时间推进，代价要认。** 与 D35 同一条性质：他边走边看，`_progress` 就被钉在当前值。但这里钉住**不是失败状态** —— 闩锁不会倒回去，最多是他停一步让它灭完，或者先走开再回来。所以不必为它开「表现层走 real-time」的特例（`KeyPickup` 头顶那把钥匙才需要，D30 第 4 条）。
+9. **消散用世界时间推进，代价要认。** 与 D35 同一条性质：他边走边看，`_progress` 就被钉在当前值。但这里钉住**不是失败状态** —— 闩锁不会倒回去，最多是他停一步让它灭完，或者先走开再回来。所以不必为它开「表现层走 real-time」的特例（`KeyPickup` 那把跟身的钥匙才需要，D30 第 4 条 / D39）。**订正（D40，2026-09-20，本条整条作废）：错在把「停一步让它灭完」当成玩家愿意付的代价。感应带探在门洞前约 46 px，玩家朝门走 = 必然按着方向键 = 世界必然冻结，所以那次钉住不是偶发而是「每次都会发生」，试玩反馈就是这句：「钥匙门的触发好像有点问题，似乎不是立刻触发的」。详见 D40。**
 10. **挤压这一整类 bug 在刷卡门上结构性消失。** `KeyDoor` 的碰撞体只会**变小，永远不会变大**，而它初始是全高实心的 —— 玩家不可能已经在光场里，因此不可能被它罩住、卡住或压扁。D21 花力气守的「只许停不许顶」、D27 后果二那条「蹲在门下起不来」，在这里都不存在，也不需要 `SQUEEZE_MASK` 那套探针。**这是拆场景换来的最大一项**，比「触发逻辑更清楚」实在得多。
 
-**范围订正（D32 的 M5 交付清单）**：`key_lock.tscn` **取消**，改为 `key_door.tscn` + `key_door.gd`。构件从 4 个 tscn 缩到 3 个（`hazard.tscn` 拆成 `spikes.tscn` + `electric_bar.tscn` 按 D34，所以实际是 5 个 tscn、6 个脚本：`HazardBase` / `Spikes` / `ElectricBar` / `KeyPickup` / `KeyDoor` / `Checkpoint`），守门条数一条没少。D31 粘性表那行「钥匙（持有 / 闩锁 / 门开度）→ 全部归位」原样成立：消散进度是世界时间的纯函数，重载即归零。
+**范围订正（D32 的 M5 交付清单）**：`key_lock.tscn` **取消**，改为 `key_door.tscn` + `key_door.gd`。构件从 4 个 tscn 缩到 3 个（`hazard.tscn` 拆成 `spikes.tscn` + `electric_bar.tscn` 按 D34，所以实际是 5 个 tscn、6 个脚本：`HazardBase` / `Spikes` / `ElectricBar` / `KeyPickup` / `KeyDoor` / `Checkpoint`），守门条数一条没少。D31 粘性表那行「钥匙（持有 / 闩锁 / 门开度）→ 全部归位」原样成立，而 D40 之后它更简单：光幕只剩两态、没有开度可回灌，重载即回到「锁着」。
 
 **要你知情的一条**：第一次出现刷卡门时，玩家必须**先捡到钥匙、再走到门前** —— 光幕没有卷帘那种「一块钢板会落下来」的实体威胁感，可读性全靠「琥珀的锁 + 琥珀的钥匙」这一对颜色配对撑着。这条进手册 §8 的摆图顺序。
 
@@ -1192,3 +1239,110 @@ M5 交付：`hazard.tscn`（尖刺 / 电流棒两种参数）、`key_pickup.tscn
 6. **没做的一半**：`fall` 仍只有一套（带后仰 `dome_lean −1.0..−1.5`）。下落段比上升段长得多，「空中推方向键该不该改判」的窗口也随之变长，值不值得再来一套要看实机观感 —— 留给试玩定。
 
 **验证**：`sprite_selftest` 第 1 段帧表加 `jump_straight`；第 5 段原地跳改断 `jump_straight`；**新增 5b 段**（跑起来跳断 `jump`，随后把 `velocity.x` 强行抹成 0 再断一次 `jump` —— 这条专门堵死将来改成「逐帧读速度」的实现）；第 7 段蹲姿起跳改断 `jump_straight`。四条守门全绿：`SPRITE SELFTEST DONE failures=0`、`[kit-selftest] done failures=0`、`VERIFY DONE doors=3 failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。
+
+---
+
+## 钥匙卡的持有表现（2026-09-20）
+
+### D39 · 卡**含在体内**：钉在脚底的常量偏移 + 60% 半透明，不动立绘、不裁不遮罩
+
+**用户提出（2026-09-20，原话）**：「我希望修改钥匙的持有方式，改为被小史莱姆吞在身体里」。选型问答定下「含在体内透出一点亮」。看完第一版对照图后追加裁定：**「可以不修改立绘，直接让钥匙卡跟随玩家，渲染在玩家图层上并半透明，就算移动时有部分在玩家体外也合理」**。
+
+**结论**：
+
+1. **只改画法，D30 的契约一条不动。** `held` 仍住在 `KeyPickup` 实例上、`consume()` 语义不变、拾取带仍是带心 −15 的 32×24、跟随仍走 real-time（D30 第 4 条后半句正是这条改动的地基：冻结期间玩家会动，卡必须跟着动）。节点**照样不 re-parent** —— `PlayerVisual` 带 `facing` 镜像，子节点会跟着翻。
+2. **摆位钉在脚底，不钉在盒顶、也不钉在当前轮廓上。** 卡底 = 玩家原点 + `Player.COLLISION_HALF_HEIGHT` − `FOOT_GAP(3)`。理由是 D22 的脚底契约：脚底那条线永不动，而盒顶会随蹲伏（30→15）与落地压扁上下跳 —— 钉在顶上就得跟着状态机走，钉在脚底则**一个常量就够，不读帧、不问蹲伏、不看朝向**。
+3. **卡缩到 10×6（原卡 14×10 的 0.7 倍）。** 按 idle 帧量：脚底上方 10–14 px 是那双眼睛，14×10 的卡贴上去正好整块盖住，半透明之后眼睛泛成两块琥珀斑 —— **比露在体外更糟**。10×6 的顶行刚好不碰眼睛，读起来是「吞下去的卡在肚子里」。
+4. **alpha 取 0.6。** 对照图实测的「卡区亮度 vs 身体其余亮度」差：0.45 档在 `jump_straight` 上只剩 0.116（糊进黑身体里，看不出持有），0.6 档 0.199–0.257，0.75 档 0.281–0.305 但顶行开始啃眼睛。0.6 是「在体内」与「还认得出是那张卡」的分界。
+5. **不遮罩、不裁边，露出体外算合理 —— 而这条正是方案便宜的原因。** 实测五档身形里只有 `crouch` 漏 3 px（蹲姿身体只有 13 px 高，卡占 6 + 离地 3），其余四档 `outside=0`。所以那条裁定几乎没被用上，但它换掉了整套机器：不用运行时读每帧 alpha、不用 shader、不用第二套帧图。
+6. **层级是隐式依赖，记在这里。** 卡能压在主角之上，只因为 `Objects` 在场景树里排在 `Player` 之后（`level_template.tscn` 与 `level1.tscn` 都是 Triggers → Player → Objects），构件本身没有 `z_index`。**将来谁把 Player 挪到 Objects 后面，卡就会跑到身体背后**，那时要显式给 `z_index`。
+7. **被否掉的另一半留个名字。** 选型第一版实现过「按当前帧的**实心带**摆卡 + 把同一帧按 62%/48% 盖回卡上面」：每帧的不透明行连续无孔到底部波纹才断，卡底坐在那条带上、横向取所选行跨度交集，于是卡**整块必然落在轮廓内**（30 格实测 `leaks=0`，本可写成 `sprite_selftest` 的硬不变式），且眼睛与舌头浮在卡前 = 真「在体内」。它更好看，但要在运行时读每帧 alpha 图，用户以「不动立绘」否掉。要回头做，`tools/gen_keyheld_preview.py` 的历史版本就是那条算式的参照。
+
+**验证**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。**没加新断言**：这条改动是画面上三个常量（`FOOT_GAP` / `HELD_W×HELD_H` / `HELD_ALPHA`），唯一可静态检查的是「`FOOT_GAP + HELD_H ≤ 蹲姿美术高 13`」，一条编译期就能看出来的算术，不值得占守门的位置。像素级核对由 `py tools/gen_keyheld_preview.py` 出的对照图承担 —— 它用的就是引擎里同一条摆位算式（卡底 = `G.FEET_ROW - FOOT_GAP`，水平取 44 宽画布中心），所以图上看到的位置就是引擎里的位置。
+
+---
+
+## 刷卡门的开幕不吃时间（2026-09-20）
+
+### D40 · 闩锁**当帧**撤幕：光幕只剩「满 / 无」两态，开幕不消费任何 delta（推翻 D36 第 9 条）
+
+**订正（D41，2026-09-20）**：本条第 2 条「两态取代行程」与第 4 条「不保留那 0.5 s 动画」已被取代 —— 光幕改回**一拍自上而下逐行熄灭的演出**，同时把玩家的移动锁住。**诊断部分（尤其第 3、5 点）与「刷卡门不消费世界 delta」这条结论一字未动**，而后者正是 D41 敢把动画加回来的地基：演出跑在固定物理步长上，世界冻着也照跑。
+
+**触发这条改动的反馈（2026-09-20，原话）**：「钥匙门的触发好像有点问题，似乎不是立刻触发的」。看完诊断后的裁定：**「门立刻打开，光幕直接消失」**。
+
+**诊断（先把「哪里没坏」记清楚，免得下次重查一遍）**：
+
+1. **闩锁本身一直是立刻的。** `_scan_reader()` 在 `_physics_process` 里跑、不吃世界 delta（D38 第 4 条），`Reader` 是门自己的 `Area2D`（layer 0 / mask 2，只认玩家）。玩家进带 → `pickup.consume()` → `is_latched = true` 同一帧完成。层值、带几何、轮询频率、`_physics_process` 与 Player 的先后顺序，逐条查过，都没问题。
+2. **延迟全部在开幕那一段。** 旧实现的 `_progress` 由 `TimeReceiver.get_physics_delta()` 推进，而那个函数在 FROZEN 时恒返回 0 —— 于是 `if d <= 0.0: return` 直接把行程钉死。
+3. **而且它必然发生，不是偶发。** 感应带外沿在门洞前 `width/2 + sensor_reach`（level1 实测 16 + 30 = 46 px），玩家**朝门走 = 必然按着方向键 = 世界必然冻结**。所以「带卡触发闩锁」这个事件 **100% 落在冻结态里**，而冻结态里光幕一步都不走。D36 第 9 条把钉住当成"最多停一步"的偶发代价，判断就在这里错了。
+4. **玩家的体感账**：LED 当帧变青（唯一即时的反馈）→ 约 0.09 s 后（再走 23 px ÷ `move_speed` 260）撞在一堵**满高、实心、仍然亮着**的光幕上 → 必须松开方向键 → 再吃 `RELEASE_BUFFER_DURATION` 0.08 s 防抖 + `open_time` 0.5 s。最好情况 ≈0.58 s；中途再按一下方向键就原地钉住，于是读起来是"刷卡没反应"而不是"门在慢慢开"。
+5. **同一条规则为什么没在按钮门身上暴露**：差别在**自然终态**。按钮的自然终态是「站上去、停手」= 已经解冻，门自己走完；刷卡门的自然终态是「进门」= 还在按方向键。所以那 6 行门控 delta 在一扇门上几乎不显形，在另一扇门上每次都显形。
+
+**结论**：
+
+1. **判据与契约一条不动。** 感应带仍是门的子节点、仍是带心 −15、`key` 仍是 `@export_node_path`、闩锁仍是一次性（true 只发一次、永不倒回）、`consume()` 语义不变、D38「接触即判不吃 delta」不变。**变的只有闩锁之后光幕怎么退场。**
+2. **两态取代行程。**（**D41 已取代本条**，`_curtain_height()` 现在是三档） `_curtain_height()` 是唯一真值来源：锁着 = `height`，撤掉 = `OPEN_H(0.001)`。绘制侧先 `floorf()`，0.001 读成 0 → 整块不画；碰撞侧同一个来源 → D36 第 6 条 b 那条「画出来的 == 挡得住的」继续成立，只是中间态不再可达。留 0.001 而不是 0 与 `Door._apply` 同源：Godot 不接受零尺寸的碰撞形状。`height` 是小数时（level1 上摆的是 72.095）"往收的方向舍"那条理由仍然成立，所以取整没被顺手删。
+3. **删干净**：`open_time` 导出项、`_progress` 字段、`_apply()`、`_physics_process` 里那 6 行门控 delta 累计、以及 `key_door.tscn` 的 `TimeReceiver` 子节点（连带 `load_steps` 5→4）。这张门从此**完全不消费世界时间**，是 M5 构件里唯一不挂 `TimeReceiver` 的一个，`DebugOverlay` 的 `time_receivers` 计数因此少 1（它只打印，不断言）。
+4. **没走「保留行程但改吃 real-time」那条更便宜的路**（**D41 恰恰走了这条路**，但把「人在幕还亮着时往前走」那段窗口用移动锁堵上，而不是用「没有中间态」堵上），虽然它当时确实是选型时的首选方案、改动只有两行。理由：那样会留下一个「画出来还亮着的光幕挡不住人」的窗口（冻结中幕在灭、人还按着方向键往前走），而那正是 D36 第 5 条点名的破绽来源。两态**结构上不存在**这段窗口。代价是丢掉那 0.5 s 的逐行熄灭节奏 —— 用户选了代价小的那条。
+5. **幕体的画法一行没改。** 残辉三行 / 半透明幕体 / 外侧光晕 / 左右亮收边 / 顶端断电前沿 / 底部接地行，全都在"满幕"那一帧画得出来，D36 第 7 条的定稿与 `tools/gen_props.py` 的 `paint_gate` 合成路径继续同源。改的是它有没有中间态，不是它长什么样。
+6. **摆图后果**：刷卡门不再有「开多慢」这个可调量（**D41 把它以 `swipe_time` 的名义加了回来，但那是演出的长度、不是门"走世界时间"的速度**）。对一个**开了就永远开着**的一次性构件来说，那 0.5 s 唯一的作用就是让玩家多等，不构成谜题 —— 想要时间压力请用 `electric_bar.tscn`，它的相位本来就是为世界时间设计的（D35）。
+
+**验证**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`（`EXPORTS` 白名单同步去掉 `open_time`，其余断言一字未改）、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。第 8 组按两态重写：锁着那一态断言「碰撞体挡满 32×96 且与 `curtain_rect()` 同一截」，然后**在闩锁断言与撤幕断言之间不放任何 `await`**，中间再插一条 `TimeManager.is_time_frozen()` —— 也就是"世界此刻仍然冻着，而幕已经没了"。这条正是旧代码会当场挂掉的断言，D40 的回归由它守；旧的「冻结钉住进度」三条按两态删掉。手感本身（松手不再必要、撞上去不再反馈矛盾）仍归试玩判定。**订正（D41）：这套「闩锁与撤幕之间不放 `await`」的断言结构随两态一起退役**，第 8 组改成按演出三拍采样。
+
+---
+
+## 刷卡门改成一拍演出（2026-09-20）
+
+### D41 · 认卡后**先锁移动再演一拍**：卡从体内飞出并淡化、光幕同时自上而下熄灭，两头都跑完才把移动还回去（取代 D40 第 2/4 条）
+
+**方案由用户提出（2026-09-20，原话）**：「我想到更好的实现方式了：在检测到玩家有钥匙时，玩家先禁止移动，钥匙从体内向上飞出并逐渐淡化消失，光幕同时逐渐消失，动画都结束后玩家恢复移动」。追问后两条裁定：**世界状态 = 「世界停着，演出在冻结的一拍里跑」**；**光幕退场 = 「自上而下逐行熄灭」**。
+
+**为什么 D40 的顾虑这次不成立**：D40 否掉中间态，真正的理由不是"动画贵"，而是那句「会留下一个『画出来还亮着的光幕挡不住人』的窗口（冻结中幕在灭、人还按着方向键往前走）」（D40 第 4 条）。**移动锁把那段窗口整个删掉**：演出期间玩家走不动，所以"亮着的幕挡不住人"这件事根本没有观测者。D40 留下来的地基 —— 刷卡门一行都不消费世界 delta —— 正是这次能把动画加回来的前提：动画跑的那条钟本来就没人拦。这也正是本项目的取舍顺序里那条判断式的正例：**先问"露馅的窗口还在不在"，窗口没了才轮得到更好看的那半。**
+
+**结论**：
+
+1. **锁是 Player 上的一个布尔，不是一套状态机。** `Player.movement_locked` 只掐两件事：水平输入与起跳。水平轴收成唯一读点 `_horizontal_axis()`（`_apply_horizontal` 与 `_update_wall_press` 以前各读一遍 `Input.get_axis`，散在两处的锁迟早漏一处），锁住时返回 0 —— 于是走的是**既有摩擦分支**，人照物理减速停住，比把 `velocity.x` 钉死更不像撞到一堵看不见的墙；`_update_wall_press` 因此白捡同一效果（`side == 0` 直接返回）。起跳沿用 `is_head_blocked` 那条既有的「输入照读、动作抑制」写法，且**连缓冲区一起清**，否则锁一松人会自己弹一下。重力不掐：腾空时被锁照常落地。`respawn()` 归零。
+2. **锁绝不碰 `notify_movement_intent`。** 玩家按着方向键 = 世界继续冻着，这一拍里世界**停着**（用户裁定的第一条），解冻时机仍然只由他松手决定。锁管的是"人别往前走"，不是"世界往前走"。
+3. **门的钟 = `_physics_process(delta)` 的固定步长。** 这道闸只截 `TimeReceiver.get_physics_delta()`，截不到引擎自己传进来的 delta，所以 `_swipe_elapsed += delta` 在冻结中照样累计（沿用 D40 的"不吃世界时间"）。`_curtain_height()` 从两档改三档：满高 / `height * (1 - progress)` / `OPEN_H`，塌到底仍兜在 `OPEN_H` 而不是 0（Godot 不收零尺寸形状）。**幕体的绘制算式一个字没改**：底边永远接地、只有 `live` 变小 —— 所谓"自上而下逐行熄灭"就是既有算式在中间态下的自然读法，也是 D36 第 7 条与 `paint_gate` 同源那条没被破坏的原因。
+4. **时长只有一个来源，两处共用。** `swipe_time` 只住在门上（默认 0.45 s），`KeyPickup.consume(fly_time)` 以参数收下它，卡这一侧刻意不留第二个常量。**卡的计时放在 `_physics_process`、绘制留在 `_process`**：画要跟着玩家此刻的位置（D39/D30 第 4 条的豁免通道），可钟要是也骑在帧率相关的真实 delta 上，掉一帧就会让卡先飞完、幕还在塌，那一拍当场散架。两条都吃固定步长 ⇒ 同一条钟 ⇒ 同拍结束。
+5. **两条曲线刻意不同。** 卡用二次缓出（先窜后飘）读作「被吐出来」，同时尺寸从含着的 10×6 长回贴图原样、alpha 线性掉到 0；幕用**线性**塌，匀速下落读作「机器断电」。两个主语各走各的，都套同一条曲线反而糊成一团。没引 `easef()` 是它的 `curve` 方向反直觉（>1 是缓入），写算式比查语义便宜。
+6. **LED 在演出开始的那一帧转青**（不是等 `is_latched`）。它是「认卡了、别硬走」的即时回执；等演完才变色，等于把回执延后到玩家已经开始按键之后 —— 那正是 D40 诊断里"只有 LED 是即时反馈"剩下的唯一一根，别砍掉。
+7. **收尾顺序：先 `is_latched` + 碰撞归零，后解锁。** 反过来会有一帧"玩家已经能行动、门却还没让行"，就是 D40 要消灭的那个体感。
+8. **挤压与卡死都无从发生。** 闩锁瞬间玩家前沿离幕面还有约 40 px（感应带 46 − 盒半宽 10 − 幕半宽 16），锁期间靠摩擦最多再飘 ~10 px（260 → 0 ÷ 3200），而幕**只缩不涨**（D36 第 10 条同一论证）；即使腾空被锁落下也在幕面之外。演出中途死亡 → `Main.reload_level()` 重建整棵场景，门与玩家都是新实例，`respawn()` 另外再兜一层 `movement_locked = false`。
+9. **摆图后果**：多回一个可调量 `swipe_time`（真实秒数，与谜题无关，纯节奏），填 0 退化成 D40 那种一帧硬切。`key_door.tscn` 结构不变（**仍然不挂 `TimeReceiver`**，M5 里唯一不挂的那个），场景文件零改动。
+10. **不做的事**：不给 Player 加通用「演出中 / 过场」状态机（这一拍只需要一个布尔）；不改 D31 粘性表 —— 回灌的仍是 `held` / `is_latched` 两条，飞卡与演出进度都是纯表现，重载即归位。
+
+**验证**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`（`EXPORTS` 白名单加回 `swipe_time`）、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。第 8 组改成按三拍采样：**认卡帧**（卡已消耗、移动已锁、门**还**没让行、幕基本满、世界冻着）→ **演出中**（按住 `move_right` 位移严格为零、幕比上一帧矮、碰撞体 ≥ 画出来的且差不到 1 px、底边始终接地、卡与幕都在半路、世界仍冻着）→ **收尾**（有限帧内跑完、碰撞归零、不再画幕、卡同时飞完、移动已解锁、**解锁后按住右真的能走**——这条守的是"锁不会变成永久状态"）。`Input.action_press` 在无头自测里可用（`sprite_selftest` 已经在用），所以这是真输入路径而不是伪造读数。手感与节奏（0.45 s 是否偏长）仍归试玩判定。
+
+---
+
+## 死亡不再是一帧换场景（2026-09-21）
+
+### D42 · 危险物点名后先演**收缩 + 爆裂**那一拍（0.55 s），世界被**强制冻结**钉住，演完才重载；D31 的「点名 → 关卡 → 常驻根」这条委托链一字未动
+
+**触发这条改动的反馈（2026-09-21，原话）**：「玩家在碰到尖刺的时候什么都没有发生，我觉得应该播放死亡动画，然后回到存档点或者出生点」。选型后的三条裁定：**演出形态 = 「D 收缩 + 爆裂」**；**世界状态 = 「强制冻结定帧」**（钉住，与移动意图无关）；**时长 = 「0.55 秒」**（做成导出项，节奏留给用户在实机里调）。
+
+**诊断（先记清楚"没坏在哪"）**：判死一直是好的 —— `HazardBase` 发 `touched_player`、`LevelBase._bind_hazards()` 全子树按信号名自动接线、D38「接触即判不吃世界 delta」在冻结里照样咬人。**"什么都没有发生"是"死得太快"**：旧实现里点名之后，`_death_pending` 只缓一帧（为了不在物理回调里 free 整棵关卡），下一拍 `_process` 就 `reload_level()`。于是玩家看到的是**同一帧里人没了 + 画面重画 + 自己出现在存档点**，视线找不到落点，读不出「我死了」这件事，只读得出「刚才是不是卡了一下」。
+
+**选型（四套候选，一张图：`assets/player/preview_death_candidates.png`，算式与 `tools/gen_death_preview.py` 逐字同源）**：
+
+1. **A 压扁 + 溅开** —— 否决：压扁这条形变通道已经被蹲伏（D26）与压墙（D21/D24 的 `wall_press`）各占一份，同一帧上再叠第三种压法，三条曲线迟早互相踩；且需要新的挤压帧。
+2. **B 纯塌缩** —— 否决：只有缩放没有"散了"的证据，读作「被吸进去」而不是「被打穿」。
+3. **C 击退 + 闪白** —— 否决：闪白要么占全屏（`CanvasLayer` 又多一个）要么占身体（`modulate` 已经被淡出用着），而击退要动速度，跟"死亡停摆"这件事本身矛盾。
+4. **D 收缩 + 爆裂（选定）** —— 身体等比缩到一个点、同时上飘，14 滴同材质的液滴从胸口径向溅出、走抛物线落回脚底那条线就收。**零新帧、零粒子系统、零 `AnimationPlayer`**：液滴是两笔 `draw_rect`（先亮边后身体色，用的就是主角那道 `player_rim`），位置是解析式。收缩给「这条命没了」一个明确落点，液滴把它读回「小史莱姆散了」—— 与 D39 卡含在体内那套身体语言同一材质。
+
+**结论**：
+
+1. **时长只住一处。** `LevelBase.death_time`（默认 0.55 s）→ `Player.die(duration)` 收下 → `DeathBurst.launch(duration)` 再转一次。Player 与 DeathBurst 两侧都不留第二个常量，同 D41 第 4 条「两头共用一条钟才谈得上同拍收尾」。
+2. **重载改由信号驱动，不再数帧。** `Player.death_finished` → `_death_pending = true` → 下一拍 `_process` 走 `_reload_level()`。**刻意不在 `LevelBase._process` 里数真实 delta 来判"演出该完了"**：那样"动画"走固定物理步长、"重载"走帧率相关的真实时间，掉一帧就会让重载抢在最后一帧前面，那一拍当场散架（D41 第 4 条同一个坑）。`LevelBase._process` 里 `_dying` 为真时直接 `return`，能力启用与终点收尾两段等待都让位给死亡。
+3. **钉住走状态机本身，不走意图通道。** `TimeManager.set_frozen_override(true)` 写的是同一个 `current_state`，于是灰滤镜（`TimeFreezeFilter` 订阅 `state_changed`）、`TimeReceiver.get_physics_delta()`、`DebugOverlay` 计数全都自动读到同一个事实，不需要任何一处为死亡开旁路。**为什么不复用现成的 `notify_movement_intent(true)`**：它在 `is_ability_enabled == false` 时是**空操作**，而"能力还没拿到就撞上尖刺"是合法配置（引导关之前摆危险物是允许的）—— 用户裁定的「强制冻结」必须是"与能力开没开都无关"，那就不该借一条会被能力门控掉的通道。
+4. **钉住期间意图整条通道静音。** `notify_movement_intent()` 顶上多一个 `or _frozen_override` 就返回。不加这一条会出这种画面：玩家死前按着方向键、看见尖刺那一刻松手 → 那一下松开启动 0.08 s 解冻防抖 → 世界在演出进行到一半时放回流动。锁归零只有一条路径：`reset_state()`（新关卡实例的 `_ready()` 必然调它，D31 的关卡级重置顺手承担了这件事）。
+5. **尸体的停摆放在 `_physics_process` 最顶上。** `if is_dead: _advance_death(delta); return` —— 因为下面每一段都默认"这是一个还活着的人在动"，逐条加 `if is_dead` 早晚会漏一条（D41 的 `movement_locked` 只掐两件事，因为那是"暂时不能动"；死亡是"不再动"，口径不同）。`is_dead` 压过 `movement_locked`：死在刷卡演出里时门照样会把移动还回来，但那具尸体不该因此站起来走路。
+6. **三处接缝按同一条口径堵：尸体不是玩家。** `key_door._scan_reader()` 里 `body as Player` 且 `is_dead` 就直接返回（不然能"刷卡带着尸体进门"）；`key_pickup._draw()` 里 `is_dead` 不画（不然卡会悬浮在缩没的位置上，正是 D39 那条"含在体内"的反面）；`player_visual._process()` 顶上 `is_dead` 时 `pause()` 后返回（不然刹车水花/落地挤压的剪辑会和收缩抢同一条 `_visual.scale`，两条曲线互相覆盖）。
+7. **收缩算式**：等比缩到 `DEATH_SHRINK_MIN = 0.12`（留一个"缩没了"的落点，比凭空消失读得清楚，而这一刻透明度已经掉到 0），同时上飘 12 px（只缩不飘读作"被压扁"），收缩在 60% 处到位、淡出从 55% 起 —— **收缩比淡出先完成**，两条错开才不像"一起消失"。
+8. **`DeathBurst` 挂在 Player 下、`Visual` 之后。** 之后 = 画在身体之上；挂 Player 而不是 Visual 之下，是因为 Visual 正被演出缩着，液滴不该跟着一起缩。出射点在胸口（脚底上方 12 px，从脚底溅读作"脚下打滑"），回收线就是脚底那条 `FEET_Y` —— **D22 脚底契约在演出期间不再是硬约束（人都散了），但爆裂的位置账仍然按它算**，所以读起来是"在地上被打穿"而不是"半空里爆了个气球"。液滴位置是解析式（`p = p₀ + v·t + ½g·t²`），没有状态要维护，重载即归零。
+9. **一个数换一条注释，别拿循环解析去换。** `DeathBurst.FEET_Y` 刻意写死 `15.0` 而不引用 `Player.COLLISION_HALF_HEIGHT`：Player 已经按类型引用 `DeathBurst`（`@onready var _death_burst: DeathBurst`），反向引用常量就成了 GDScript 的循环解析。改那条常量时记得回来改这里（注释已写明）。
+10. **F6 直跑要兜底。** `_reload_level()` 拿不到常驻根（`world_root` 组里没有）时改走 `get_tree().reload_current_scene()`。以前这里静默 no-op 无所谓（单关直跑看不出差别），现在不加就是"尸体永久钉在冻结里"—— 演出把这条老路径的代价从"看不见"抬成了"卡死"。
+11. **不做的事**：不上 `GPUParticles2D`（14 滴定长定轨的液滴用 `draw_rect` 更便宜，而且和选型图逐像素同源）；不上 `AnimationPlayer`（正式构件与关卡里没有一处用它，只有 M1 的验证体 `test_cube` 挂着它 —— 为什么不用见 `door.gd` 第 10 行与 D6 给 pendulum 记的那条"无跳变要靠肉眼判断"）；不给"复活淡入""无敌帧""尸体留存"留钩子 —— D31 那条「回存档点而不是原地复活」的裁定把它们全废了。
+
+**验证**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。`verify_kit` 侧：`EXPORTS` 白名单加 `death_time`，关卡契约新增一条「Player 下必须有 `DeathBurst`」（`player.gd` 用 `@onready $DeathBurst` 拿它，少了这个节点要到人真的撞上尖刺才露馅）。第 9 组按死亡那一拍重写：**刚死时不重载** → **能力没开也钉得住冻结**（`not is_ability_enabled and is_time_frozen() and is_frozen_overridden()` —— 这条正是"借意图通道"那版方案会当场挂掉的地方）→ 进度落在开区间、`Visual.scale.y < 1`、液滴已挂上 → **按住 `move_right` 的尸体位移恒等为 0** 且 `elapsed_world_time` 一字不涨 → 轮询到重载**恰好一次**、液滴自己收摊 → 整个演出实测占 20~60 物理帧（下限守的是"别又换回一帧重载"，上限守的是"别卡在半途"）→ 原有的「死亡重载不清 `run_state`」与回灌四条一字未动。**一个踩到的坑记下来**：`Area2D` 的 `body_entered` 不会在改 `global_position` 的同一帧出现（要等物理服务器把移动后的形状冲一次），所以判死那一拍在测试里是**轮询"什么时候死"**，不是赌固定帧数 —— 第 7 组那条既有的「人站进光束照样被判死」也是同一条理由才成立的。手感（0.55 s 是长是短、收缩读不读得出"死"）仍归试玩判定。

@@ -20,12 +20,13 @@
 ## 2. 工程布局
 
 - 根目录 `D:\Godot\Ups\upstream`。**不是 git 仓库**，删除/覆盖不可恢复，操作要保守。
-- `scenes/actors/player/` 玩家；`scenes/objects/` 下是门（door）、按钮（button_plate）、钟摆（pendulum）、移动方块（moving_block）、祭坛（ability_altar）、感应区（sensor_zone）；`autoloads/time_manager.gd` 时间系统；`tools/` 帧生成脚本与三个回归守门；`assets/player/slime/` 程序生成的像素帧。
-- 文档：`docs/architecture_chapter_01.md` 记着 **D1~D22 全部设计决策**（开工前先读，尤其是末尾的补录）；`docs/level_authoring_guide.md` 是摆图手册；`docs/m2_level_01_layout.md` 是引导关白模说明。
+- `scenes/actors/player/` 玩家；`scenes/objects/` 下是门（door）、按钮（button_plate）、钟摆（pendulum）、移动方块（moving_block）、祭坛（ability_altar）、感应区（sensor_zone）、尖刺（spikes）、电棒（electric_bar）、能量卡（key_pickup）、刷卡门（key_door）、存档点（checkpoint）；`components/` 是跨构件小基类（time_receiver / hazard_base / tile_draw）；`autoloads/time_manager.gd` 时间系统；`tools/` 生成脚本与四个回归守门；`assets/player/slime/` 程序生成的像素帧。
+- 文档：`docs/architecture_chapter_01.md` 记着 **D1~D42 全部设计决策**（开工前先读，尤其是末尾的补录）；`docs/level_authoring_guide.md` 是摆图手册；`docs/m2_level_01_layout.md` 是引导关白模说明。
 
 ## 3. 时间系统怎么实现
 
-- `TimeManager`（autoload）只累计世界时间；每个构件挂一个 `TimeReceiver`，每帧读「门控 delta」——冻结期间该值为 0，构件因此自然停住；解冻后从停住的地方继续。**连续性靠算术性质保证**（开度是累计时间的纯函数），不用 tween/seek 那种恢复瞬间会跳帧的路子。
+- `TimeManager`（autoload）只累计世界时间；每个构件挂一个 `TimeReceiver`，每帧读「门控 delta」——冻结期间该值为 0，构件因此自然停住；解冻后从停住的地方继续。**连续性靠算术性质保证**（开度是累计时间的纯函数），不用 tween/seek 那种恢复瞬间会跳帧的路子。目前的例外是刷卡门（D40 / D41）：它不挂 `TimeReceiver`、完全不消费世界时间，因为「带卡走近 → 认卡 → 演一拍退场」是一次性后果而不是要玩家利用的节拍；那拍动画跑在引擎固定物理步长上，冻结中也照跑。
+- **进入冻结态有两条来源（D42 起）**：玩家的移动意图，与 `TimeManager.set_frozen_override(true)` 那道**强制钉住**（死亡那一拍在用）。钉住与能力开没开、与松没松手都无关，且钉住期间意图整条通道静音（否则死前按着方向键、死后松手会把刚钉住的世界放回流动）；两条来源写的都是同一个 `current_state`，所以灰滤镜、门控 delta、调试面板全都自动读到同一个事实。只有 `reset_state()`（每个关卡实例 `_ready()` 必调）会清掉那道锁。
 - 绝对不用 `Engine.time_scale`。
 - 玩家、相机、UI 用真实 delta，永远照常运行；玩家动画在冻结期间照常播放（这是"玩家例外"最直观的可读性）。
 
@@ -38,21 +39,27 @@
 - ButtonPlate（按钮面板，冻结期间不弹起）、SensorZone（触发区，人走开立刻松开）、Pendulum（纯演示无碰撞）、MovingBlock（往返平台）、AbilityAltar（一次性能力祭坛，静止时刻才生效）。
 - 新关卡：复制 `level_template.tscn`/`level_template.gd` 起步；接线优先写在场景里（拖属性），关卡脚本只处理场景表达不出来的逻辑。
 - **D28（2026-09-20）**：祭坛授予能力（D16）与终点区收尾（D18）已下沉到 `LevelBase`，按约定摆 `Objects/AbilityAltar` / `Triggers/GoalZone` 就自动生效，新关零代码；接线一律 `@export_node_path`（默认路径 + 解析不到静默跳过）。`verify_kit` 改为**自动发现** `scenes/levels` 下的关卡、且不再钉任何摆位坐标（挪祭坛不再 FAIL）。
+- **M5 危险与推进（2026-09-20 实装）**：尖刺（常开地形）、电棒（周期通断、可浮空可横可竖）、能量卡 + 刷卡门（一次性、**认卡后演一拍**）、存档点（踩上即存）。**接触即判（D38）**：伤害、拾卡、闩锁都不吃世界时间，冻结期间照样发生 —— 「冻结 = 无敌」不成立；要走时间的过程（电棒相位、按钮门行程）才吃门控 delta。**刷卡门把这条法则走得最远（D40 / D41）**：判据不吃时间，退场那一拍动画也不吃时间（跑在引擎固定物理步长上，世界那道闸截不到它），那张门整个不消费世界时间；它同时是全项目唯一一处只**按住**玩家自己输入的地方（演完自动放开；D42 的死亡是整条物理停摆，比"按住"更彻底，不算同一类）。**电棒相位在玩家移动期间被钉住（D35）**：起步那一瞬是断的，整段穿越绝对安全，真惩罚是中途松手。危险物判死区不在任何碰撞层上（layer 0 / mask 2 / monitorable false），挡路形态走时间固体层。危险物与存档点同祭坛/终点一样由 `LevelBase` 自动接线（零接线）。**死亡 = 重载本关并保留存档点与祭坛进度**（`Main.run_state` 只存出生点与祭坛两条，能力开启由祭坛那条推导）；钥匙卡与刷卡门归位重置；R 键/终点重开则清空进度。**死亡是一拍（D42）**：危险物点名后不再当帧换场景，先演 0.55 s「收缩 + 爆裂」（时长只住 `LevelBase.death_time`，身体与液滴共用它），那一拍**世界被强制钉在冻结态**，演完发 `death_finished` 才由关卡委托常驻根做重载；期间尸体不刷卡、不位移、不产生冻结意图（所以死在感应带里不会白耗卡）。摆图硬数（电棒最小长度、断相位时长、存档点间距等）见手册 §8a。
 
 ## 5. 玩家与美术
 
-- 控制器：CharacterBody2D，碰撞盒 **20×30**，脚底在原点下方 15 px。带跳跃宽恕窗口（coyote 0.10s / buffer 0.12s）、顶点低重力（滞空感）、提前松键截断跳跃。
+- 控制器：CharacterBody2D，碰撞盒 **20×30**，脚底在原点下方 15 px。带跳跃宽恕窗口（coyote 0.10s / buffer 0.12s）、顶点低重力（滞空感）、提前松键截断跳跃。水平轴只有一个读点（`_horizontal_axis()`），`movement_locked`（D41）为真时它返回 0 —— 锁因此自动覆盖推墙判定，新增读输入的地方走这个函数而不是 `Input.get_axis`。**`_physics_process` 最顶上是一条 `is_dead` 早退（D42）**：死亡那一拍只跑演出，输入/重力/碰撞全部停摆，因为下面每一段都默认"这是一个还活着的人在动"，逐条加判断早晚会漏。`player.tscn` 因此多了一个 `DeathBurst` 子节点（排在 `Visual` 之后 = 画在身体之上、且不吃身体那份正在缩的缩放），`verify_kit` 会查它在不在。
 - 美术是**代码程序生成**的像素帧（44×44，PIL 绘制）：`tools/gen_player_frames.py` 出 PNG + `clips.json` → `tools/build_slime_frames.gd` 生成 `slime_frames.tres`。改数值就能整批重出。
-- 十个剪辑：idle / run / start / stop / jump / fall / land / crouch_in / crouch / crouch_out。
+- 十四个剪辑：idle / run / start / stop / jump / jump_straight / fall / land / crouch_in / crouch / crouch_out / wall_press_in / wall_press / wall_press_out。
 - 近期美术特征（D22）：**底边是波浪不是直线**（流体感，逐列余弦上抬，只上抬不越基线，脚底对齐契约不破）；**按住下键（S/↓/十字键下/摇杆下）且在地面时身形下蹲压扁**；重落地时播一拍"整团拍扁"的帧；压扁时眼睛跟着变扁（5px→3px→2px）。站姿轮廓实测 32×25，全剪辑最宽 34 px。
 - **蹲伏改碰撞（D27，2026-09-19）**：蹲下时碰撞盒从 30 缩到 **15**（与美术同比例：美术 25→12.5，盒 30→15），**脚底永远在原点下方 15，只从顶部缩**。不减速、**不触发冻结判定**（这两条与 D22 一致，未变）。头顶被门/天花板压住时**保持蹲伏且禁止起跳**，头顶空出来才自动起身 —— 没有这条净空判定，起身会让盒子长进门板里。动画读 `Player.is_crouching`（实际状态）而不是按键，否则被压住时会播起身动画而盒子还蹲着。**蹲伏剪辑的优先级压过 `start`/`stop`/`run`**（D22 时代是反的，那时蹲伏是纯表现；现在反过来了，否则蹲着走会播站姿 `run` = 画面起立、碰撞还蹲着）。没有蹲走帧，蹲着移动播的是静止的压扁循环。
 
-## 6. 当前状态与最近改动（2026-09-17）
+## 6. 当前状态与最近改动（2026-09-21）
 
-- **D21 接触让位**：门下降遇到玩家即停（停在接触位置 0.1 px 余量内），玩家坐标一字不动，人让开后照常关严。实现是两次物理查询（静止矩形查零位移接触 + `cast_motion` 查亚帧距离），只夹开度，不夹意图。
-- **D22 美术**：底边波浪 + 三段下蹲压扁剪辑 + 落地拍扁帧 + 压扁时眼睛变扁。
-- 四条回归守门**全绿**：`sprite_selftest`（含"蹲着不冻结世界""底边不越基线""蹲伏缩盒 + 被压不许起身"）、`kit_selftest`、`verify_kit`（doors=2）、`tileset_selftest`（308 条）。
-- 待办：**重启编辑器后 F5 试玩验收新动画手感**（`project.godot` 加了新输入动作、帧资源变了，运行中的编辑器看不到）；积压事项 M3——全屏去饱和滤镜会把玩家也染灰，需要给玩家单独开通道，方案未定。
+- **M5 危险与推进已实装**：尖刺、电棒、能量卡与刷卡门、存档点、死亡重载与进度保留（细节见 §4；选型与决策在架构文档补录 D29~D42）。
+- **D27 蹲伏缩盒**：蹲下碰撞盒 30→15、脚底不动只从顶部缩；头顶被压住时保持蹲伏且禁止起跳；蹲伏剪辑优先级压过跑动。
+- **D37 原地跳**：新增 `jump_straight` 两帧（判据是起跳帧的水平速度，闩锁到落地）。
+- **D39 钥匙含在体内**：拾取后那张卡不再浮在头顶，而是画成**含在身体里**——半透明（60%）、缩到 10×6、钉在脚底上方 3 px 的常量偏移上，跟着玩家走。**不动立绘、不裁边、不遮罩**（用户裁定：移动时有一部分露在体外算合理，实测只有蹲伏那一档漏 3 px）。契约一条没改：`held` 仍住实例上、仍不 re-parent、跟随仍走真实时间。
+- **D40 刷卡门当帧撤幕**（2026-09-20，由试玩反馈「钥匙门的触发好像有点问题，似乎不是立刻触发的」引出）：闩锁**一直是当帧的**（`_scan_reader()` 不吃世界 delta，层值与带几何都没问题），延迟全在开幕 —— 旧的 `_progress` 吃门控 delta，而**玩家朝门走必然按着方向键 = 世界必然处于冻结态**，所以那次钉住不是偶发而是每次都发生（LED 变青之后约 0.09 s 撞在一堵仍然亮着的实心幕上，必须松手再等 0.08 + 0.5 s）。改成**两态**：`_curtain_height()` 只有 `height` 与 `OPEN_H(0.001)`，绘制与碰撞体同一来源，闩锁那一帧当场撤幕。**删掉** `open_time` 导出项、`_progress`、`_apply()` 与那 6 行 delta 累计，`key_door.tscn` 的 `TimeReceiver` 子节点也摘了 —— 这张门现在完全不消费世界时间，是 M5 里唯一这样的构件。幕体画法（残辉 / 收边 / 光晕 / 断电前沿 / 接地行）一行没改。推翻 D36 第 9 条，第 4/5 条已加订正标记。**（D41 又把退场改回一拍动画，见下条；但「不消费世界时间」这条结论留着，且成了新方案的地基。）**
+- **D41 刷卡门改成一拍演出**（2026-09-20，方案由用户提出：「检测到玩家有钥匙时，玩家先禁止移动，钥匙从体内向上飞出并逐渐淡化消失，光幕同时逐渐消失，动画都结束后玩家恢复移动」）：认卡那一帧 `Player.movement_locked = true`（**只掐水平输入与起跳**，重力/蹲伏/冻结意图都不碰，`respawn()` 归零），光幕按 `swipe_time`（默认 0.45 s）自上而下逐行塌、卡同时从脚底锚点向上飞 30 px 并放大回原尺寸淡出，两头演完才 `is_latched` + 把移动还回去。**整拍跑在引擎固定物理步长上**（那道世界闸截不到它），所以玩家按着方向键、世界继续冻着，演出照跑 —— D40 那句「刷卡门不吃世界时间」从省事变成了承重墙。时长只住在门的 `swipe_time` 上，`consume(fly_time)` 传参给卡，**卡的计时也放物理通道**（放 `_process` 会在掉帧时把这一拍拆成两半）。幕体算式仍一字未改，`key_door.tscn` 仍不挂 `TimeReceiver`。锁顺带删掉了 D40 唯一舍不得的那段窗口（「幕还亮着而人正走进去」），所以动画这次便宜得起。
+- **D42 死亡改成一拍**（2026-09-21，由试玩反馈「玩家在碰到尖刺的时候什么都没有发生」引出）：诊断是**死得太快**而不是漏判 —— 旧代码点名后只缓一帧就 `reload_level()`，人没、画面重画、出现在存档点全在同一帧里，视线找不到落点。选型四套候选（`assets/player/preview_death_candidates.png`，算式与 `tools/gen_death_preview.py` 同源）：A 压扁+溅开（否决：压扁那条形变通道已被蹲伏与压墙各占一份）、B 纯塌缩（读作"被吸进去"）、C 击退+闪白（要动速度、要抢 `modulate`），**选定 D 收缩 + 爆裂**：身体等比缩到 12% 并上飘 12 px，14 滴同材质液滴从胸口径向溅出、抛物线落回脚底就收，**零新帧、零粒子、零 `AnimationPlayer`**。三条实现要点：**时长只住 `LevelBase.death_time`** 一路传进 `die()` 与 `DeathBurst.launch()`；**重载改由 `death_finished` 信号驱动**，不在关卡里数真实 delta（那样动画走固定步长、重载走帧率相关时间，掉一帧就会抢跑）；**冻结靠 `set_frozen_override()` 钉住**，不复用 `notify_movement_intent(true)` —— 后者在能力未授予时是空操作，而"没拿到能力就撞尖刺"是合法配置。三处接缝同一条口径「尸体不算玩家」：刷卡门感应带认不到它（死在带里不白耗卡）、体内那张卡不再画、`PlayerVisual` 停止挑剪辑（否则刹车水花与收缩抢同一条 `scale`）。**推翻 D31 第 6 条**（「死亡不加演出、不复用灰滤镜」），订正标记已加在原条目下：滤镜不是被借用的符号，它读到的是那一拍真的没有世界时间在走。
+- 四条回归守门**全绿**：`verify_kit`（doors=3）、`kit_selftest`、`sprite_selftest`、`tileset_selftest`（308 条）。
+- 待办：实机试玩验收 M5 危险物手感，以及 D42 那一拍（0.55 s 是长是短、收缩 + 爆裂读不读得出"死了"，都在 `death_time` 上一个数，用户可直接在检查器里试）；M3 全屏去饱和滤镜的玩家通道方案未定。
 
 ## 7. 常用命令
 
@@ -62,13 +69,14 @@ py tools/gen_player_frames.py
 # 导入新 PNG + 重建帧资源
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream --import
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream --script res://tools/build_slime_frames.gd
-# 三条守门（改构件或改帧后都要跑，各几秒）
+# 四条守门（改构件、改帧或改图集后都要跑，各几秒）
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream --script res://tools/verify_kit.gd
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream res://tools/kit_selftest.tscn
 D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream res://tools/sprite_selftest.tscn
+D:/Godot/Godot_v4.6.1-stable_mono_win64_console.exe --headless --path D:/Godot/Ups/upstream res://tools/tileset_selftest.tscn
 ```
 
-三条都打印 `failures=0` 才算过。headless 跑脚本时把输出重定向到日志文件再读（管道 grep 会缓冲，进程不退出会误以为卡死）。
+四条都打印 `failures=0` 才算过。headless 跑脚本时把输出重定向到日志文件再读（管道 grep 会缓冲，进程不退出会误以为卡死）。
 
 ## 8. 协作约定
 

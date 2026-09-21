@@ -46,6 +46,15 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	# 死亡那一拍（D42）：姿势停在判死那一帧，不再跟着状态挑剪辑。否则「跑动→停」的
+	# 刹车甩动会盖在收缩上，而那一拍里身体该读的只有「散了」这一件事。
+	# 收缩与淡出归 Player 那份 Visual 变换，不经过这里 —— 这一拍 PlayerVisual 该做的就是别演。
+	if _player.is_dead:
+		if is_playing():
+			pause()
+		return
+	if not is_playing():
+		play()
 	_land_remaining = maxf(0.0, _land_remaining - delta)
 	_start_remaining = maxf(0.0, _start_remaining - delta)
 	_stop_remaining = maxf(0.0, _stop_remaining - delta)

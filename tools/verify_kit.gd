@@ -9,12 +9,20 @@ const SCRIPTS := [
 	"res://scenes/objects/moving_block/moving_block.gd",
 	"res://scenes/objects/ability_altar/ability_altar.gd",
 	"res://scenes/objects/sensor_zone/sensor_zone.gd",
+	"res://scenes/objects/spikes/spikes.gd",
+	"res://scenes/objects/electric_bar/electric_bar.gd",
+	"res://scenes/objects/key_pickup/key_pickup.gd",
+	"res://scenes/objects/key_door/key_door.gd",
+	"res://scenes/objects/checkpoint/checkpoint.gd",
 	"res://components/time_receiver.gd",
+	"res://components/hazard_base.gd",
 	"res://scenes/levels/level_base.gd",
 	"res://scenes/levels/level_01_tutorial.gd",
 	"res://scenes/levels/level_template.gd",
 	"res://scenes/levels/main.gd",
 ]
+# tile_draw.gd 刻意不在：它 extends RefCounted，下面的 instance.free() 对它不成立，
+# 且它没有状态可验 —— 作为 Spikes/ElectricBar/KeyDoor 的 preload 已被连带编译。
 
 ## 这些构件必须 @tool，否则检查器里改导出项不会即时重画，摆图时看到的是过时的多边形。
 const TOOL_SCRIPTS := [
@@ -25,6 +33,12 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/moving_block/moving_block.gd",
 	"res://scenes/objects/ability_altar/ability_altar.gd",
 	"res://scenes/objects/sensor_zone/sensor_zone.gd",
+	"res://scenes/objects/spikes/spikes.gd",
+	"res://scenes/objects/electric_bar/electric_bar.gd",
+	"res://scenes/objects/key_pickup/key_pickup.gd",
+	"res://scenes/objects/key_door/key_door.gd",
+	"res://scenes/objects/checkpoint/checkpoint.gd",
+	"res://components/hazard_base.gd",
 ]
 
 ## 关卡场景不再手写白名单 —— 见 _discover_level_scenes()：扫 scenes/levels 整棵子树，
@@ -37,6 +51,11 @@ const SCENES := [
 	"res://scenes/objects/moving_block/moving_block.tscn",
 	"res://scenes/objects/ability_altar/ability_altar.tscn",
 	"res://scenes/objects/sensor_zone/sensor_zone.tscn",
+	"res://scenes/objects/spikes/spikes.tscn",
+	"res://scenes/objects/electric_bar/electric_bar.tscn",
+	"res://scenes/objects/key_pickup/key_pickup.tscn",
+	"res://scenes/objects/key_door/key_door.tscn",
+	"res://scenes/objects/checkpoint/checkpoint.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
 	"res://scenes/levels/rooms/teaching_corridor.tscn",
 	"res://scenes/levels/main.tscn",
@@ -49,7 +68,10 @@ const EXPORTS := {
 	"res://scenes/objects/moving_block/moving_block.gd": ["travel_offset", "block_size", "travel_speed", "block_color"],
 	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "active_color"],
 	"res://scenes/objects/sensor_zone/sensor_zone.gd": ["width", "height", "band_centre_y", "visible_in_game"],
-	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits"],
+	"res://scenes/objects/spikes/spikes.gd": ["length"],
+	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
+	"res://scenes/objects/key_door/key_door.gd": ["height", "width", "sensor_reach", "sensor_height", "key", "swipe_time"],
+	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
 
@@ -70,6 +92,8 @@ const DOOR_SCRIPT := "res://scenes/objects/door/door.gd"
 const BUTTON_SCRIPT := "res://scenes/objects/button_plate/button_plate.gd"
 const ALTAR_SCRIPT := "res://scenes/objects/ability_altar/ability_altar.gd"
 const SENSOR_SCRIPT := "res://scenes/objects/sensor_zone/sensor_zone.gd"
+const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
+const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
 
@@ -132,6 +156,8 @@ func _initialize() -> void:
 					_fail("missing node %s/%s" % [path, child_path])
 		_check_level_contract(level, path)
 		_check_door_triggers(level)
+		_check_level_hazards(level, path)
+		_check_key_wiring(level, path)
 		level.free()
 
 
@@ -156,8 +182,9 @@ func _enter(path: String):
 
 
 ## 第二阶段：真的进树，让 _ready() -> _rebuild() 跑一遍，验派生几何。
-## 只挑不碰 TimeReceiver 的构件：门与按钮在第一帧就早退，pendulum / moving_block
-## 会无条件向 TimeManager 要 delta，而 --script 模式下 autoload 不一定在。
+## --script 模式下 autoload 实测**在场**（2026-09-20 探针：/root/TimeManager 存在、
+## 电棒时钟照走），所以每帧要门控 delta 的 ElectricBar/KeyDoor 也能进树；
+## pendulum / moving_block 仍只验实例化 —— 它们验的是行程时序，静态几何没东西可比。
 func _verify_ready_geometry() -> void:
 	var door_a = _enter("res://scenes/objects/door/door.tscn")
 	var door_b = _enter("res://scenes/objects/door/door.tscn")
@@ -207,6 +234,146 @@ func _verify_ready_geometry() -> void:
 		root.remove_child(node)
 		node.free()
 
+	_verify_m5_geometry()
+
+
+## M5 零件（D29~D38）：进树让 _rebuild() 跑完，验判死/拾取/存档带的派生几何、
+## 碰撞层契约（层值住在 .tscn 里，运行时谁翻过都会在这里露馅）、以及改导出项后
+## 盒子跟着重算的 setter 链路。
+func _verify_m5_geometry() -> void:
+	var spikes = _enter("res://scenes/objects/spikes/spikes.tscn")
+	_check_area_layers(spikes, "Spikes", 0)
+	var spike_shape: CollisionShape2D = spikes.get_node("CollisionShape2D")
+	if spike_shape.shape.size != Vector2(48.0, 14.0):
+		_fail("Spikes 判死盒 %s（应 48x14，只罩画出来的牙）" % str(spike_shape.shape.size))
+	if spike_shape.position != Vector2(0.0, -7.0):
+		_fail("Spikes 判死盒带心 %s（应 (0,-7)，底边中心原点）" % str(spike_shape.position))
+
+	var bar = _enter("res://scenes/objects/electric_bar/electric_bar.tscn")
+	_check_area_layers(bar, "ElectricBar", 0)
+	var bar_kill: CollisionShape2D = bar.get_node("CollisionShape2D")
+	if bar_kill.shape.size != Vector2(128.0, 10.0) or bar_kill.position != Vector2.ZERO:
+		_fail("ElectricBar 判死盒 %s @ %s（应 128x10 居中：原点是光束中心）"
+			% [str(bar_kill.shape.size), str(bar_kill.position)])
+	var blocker: StaticBody2D = bar.get_node("Blocker")
+	var blocker_shape: CollisionShape2D = bar.get_node("Blocker/BlockerShape")
+	if blocker_shape.shape.size != Vector2(148.0, 18.0):
+		_fail("ElectricBar 挡路盒 %s（应 148x18 罩整条纹带：站极柱顶的人不算踩电）"
+			% str(blocker_shape.shape.size))
+	if blocker.collision_layer != 0:
+		_fail("ElectricBar 默认 blocks_when_live=false，挡路盒该退层（layer 0），却在 %d"
+			% blocker.collision_layer)
+	bar.length = 64.0
+	if bar_kill.shape.size != Vector2(64.0, 10.0) or blocker_shape.shape.size != Vector2(84.0, 18.0):
+		_fail("ElectricBar 改 length 后两个盒没跟着重算")
+
+	var bar_wall = load("res://scenes/objects/electric_bar/electric_bar.tscn").instantiate()
+	bar_wall.blocks_when_live = true
+	root.add_child(bar_wall)
+	if bar_wall.get_node("Blocker").collision_layer != 4:
+		_fail("ElectricBar blocks_when_live=true 且初始通电，挡路盒该上 time_solid 层（4）")
+	root.remove_child(bar_wall)
+	bar_wall.free()
+
+	var card = _enter("res://scenes/objects/key_pickup/key_pickup.tscn")
+	_check_area_layers(card, "KeyPickup", 8)
+	var card_shape: CollisionShape2D = card.get_node("CollisionShape2D")
+	if card_shape.shape.size != Vector2(32.0, 24.0) or card_shape.position != Vector2(0.0, BAND_CENTRE):
+		_fail("KeyPickup 拾取带 %s @ %s（应 32x24 @ (0,-15)）"
+			% [str(card_shape.shape.size), str(card_shape.position)])
+
+	var save_point = _enter("res://scenes/objects/checkpoint/checkpoint.tscn")
+	_check_area_layers(save_point, "Checkpoint", 8)
+	var save_shape: CollisionShape2D = save_point.get_node("CollisionShape2D")
+	if save_shape.shape.size != Vector2(32.0, 24.0) or save_shape.position != Vector2(0.0, BAND_CENTRE):
+		_fail("Checkpoint 存档带 %s @ %s（应 32x24 @ (0,-15)）"
+			% [str(save_shape.shape.size), str(save_shape.position)])
+
+	# 刷卡门带卡进树：key 空着进树会打「永远开不了」的运行时警告，裸构件不是错误配置，别制造噪音。
+	var rig := Node2D.new()
+	root.add_child(rig)
+	var gate_card = load("res://scenes/objects/key_pickup/key_pickup.tscn").instantiate()
+	gate_card.name = "Card"
+	var gate = load("res://scenes/objects/key_door/key_door.tscn").instantiate()
+	gate.name = "Gate"
+	gate.key = NodePath("../Card")
+	rig.add_child(gate_card)
+	rig.add_child(gate)
+	if gate.collision_layer != 4 or gate.collision_mask != 0:
+		_fail("KeyDoor 本体 layer=%d mask=%d（实体门应 4/0）"
+			% [gate.collision_layer, gate.collision_mask])
+	var gate_col: CollisionShape2D = gate.get_node("CollisionShape2D")
+	var gate_rect: RectangleShape2D = gate_col.shape
+	if gate_rect.size != Vector2(32.0, 96.0) or gate_col.position != Vector2(0.0, -48.0):
+		_fail("KeyDoor 关态光幕碰撞体 %s @ %s（应 32x96 @ (0,-48)）"
+			% [str(gate_rect.size), str(gate_col.position)])
+	var curtain: Rect2 = gate.curtain_rect()
+	if curtain != Rect2(-16.0, -96.0, 32.0, 96.0):
+		_fail("KeyDoor curtain_rect %s（关态应 (-16,-96,32,96)）" % str(curtain))
+	# 「碰撞体 == 画出来的」同一截判定（D36 第 6 条 b）：上下沿与宽度都必须重合，
+	# 差一格就是「看着能过实际过不去」。行程中段由 kit_selftest 在真进度下再验。
+	if absf((gate_col.position.y - gate_rect.size.y * 0.5) - curtain.position.y) > 0.01 \
+			or absf((gate_col.position.y + gate_rect.size.y * 0.5)
+				- (curtain.position.y + curtain.size.y)) > 0.01 \
+			or absf(gate_rect.size.x - curtain.size.x) > 0.01:
+		_fail("KeyDoor 光幕碰撞体与 curtain_rect 不是同一截")
+	_check_area_layers(gate.get_node("Reader"), "KeyDoor.Reader", 0)
+	var reader_shape: CollisionShape2D = gate.get_node("Reader/ReaderShape")
+	if reader_shape.shape.size != Vector2(80.0, 40.0) or reader_shape.position != Vector2(0.0, BAND_CENTRE):
+		_fail("KeyDoor 感应带 %s @ %s（应 80x40 @ (0,-15)）"
+			% [str(reader_shape.shape.size), str(reader_shape.position)])
+
+	for node in [spikes, bar, card, save_point, rig]:
+		root.remove_child(node)
+		node.free()
+
+
+## 危险物（与 KeyDoor 的查询 Reader）共用层值：layer 0（绝不上 sensor 层 —— 玩家的
+## 头顶净空查询会把上了 sensor 层的通电棒读成「头顶是空的」，D29/D27 交叉核对的硬约束）
+## + mask 2（只认玩家）+ 不可被探测。传感器族（拾取带/存档带）则住 sensor 层 8。
+func _check_area_layers(area: Area2D, label: String, want_layer: int) -> void:
+	if area.collision_layer != want_layer or area.collision_mask != 2 or area.monitorable:
+		_fail("%s 层契约破了：layer=%d mask=%d monitorable=%s（应 %d/2/false）"
+			% [label, area.collision_layer, area.collision_mask, str(area.monitorable), want_layer])
+
+
+## 关卡实例里的危险物层契约。发现判据与 LevelBase._bind_hazards 同一个信号名 ——
+## 关卡里摆的每个危险物在这里按同一套规则再过一遍。
+func _check_level_hazards(node: Node, path: String) -> void:
+	if node.has_signal("touched_player"):
+		_check_area_layers(node, "%s/%s" % [path, str(node.name)], 0)
+	for child in node.get_children():
+		_check_level_hazards(child, path)
+
+
+## 刷卡门接线（D30 第 6 条 / D36 第 6 条）：门必须接卡、接的必须是 KeyPickup、
+## 一张卡最多被一扇门引用 —— 两扇门共享一张卡时，先闩的那扇把卡耗掉，另一扇永远开不了。
+func _check_key_wiring(level: Node, path: String) -> void:
+	var by_path := {}
+	_collect_paths(level, "", by_path)
+	var card_users := {}
+	for node_path in by_path:
+		var node: Node = by_path[node_path]
+		var script: Script = node.get_script()
+		if script == null or script.resource_path != KEYDOOR_SCRIPT:
+			continue
+		var rel: NodePath = node.get("key")
+		if rel.is_empty():
+			_fail("%s 的 %s 没接 key，这扇门永远开不了" % [path, node_path])
+			continue
+		var target := _fold_rel_path(node_path, rel)
+		if not by_path.has(target):
+			_fail("%s 的 %s key 指向不存在的节点 %s" % [path, node_path, target])
+			continue
+		var tscript: Script = by_path[target].get_script()
+		if tscript == null or tscript.resource_path != KEY_SCRIPT:
+			_fail("%s 的 %s key 指向的不是 KeyPickup（%s）" % [path, node_path, target])
+			continue
+		if card_users.has(target):
+			_fail("%s 的 %s 与 %s 共用一张卡（%s）：一扇消耗后另一扇永远闩不上"
+				% [path, card_users[target], node_path, target])
+		card_users[target] = node_path
+
 
 ## D25 立绘零件：尺寸照 props.json，像素契约照「平铺必须自洽」那套思路 ——
 ## 缝行不暗则卷帘平铺出亮带、底边不琥珀则门底读不出、前唇不比凹槽亮则「踩下」读不出。
@@ -248,6 +415,12 @@ func _verify_props() -> void:
 	_check_color("ButtonPlate.END_SHADE", bc["END_SHADE"], m["end_shade"])
 	_check_color("ButtonPlate.SOCKET", bc["SOCKET"], m["button_socket"])
 	_check_color("ButtonPlate.LED_LIT", bc["LED_LIT"], m["led_lit"])
+	# M5（D36 第 6/7 条）：光幕三色与门楣底座各自同源 —— LED 锁色 = 钥匙卡同色是语义不是巧合。
+	var kc: Dictionary = (load(KEYDOOR_SCRIPT) as GDScript).get_script_constant_map()
+	_check_color("KeyDoor.LED_SOCKET", kc["LED_SOCKET"], m["led_socket"])
+	_check_color("KeyDoor.LED_LOCKED", kc["LED_LOCKED"], m["gate_led_locked"])
+	_check_color("KeyDoor.LED_LIT", kc["LED_LIT"], m["gate_led_lit"])
+	_check_color("KeyDoor.CURTAIN", kc["CURTAIN"], m["gate_curtain"])
 
 
 func _img(pname: String) -> Image:
@@ -319,8 +492,13 @@ func _is_level_root(node) -> bool:
 ## 那些是摆图的人每天都在动的东西，钉死在守门里只会让「挪一下祭坛」变成 FAIL。
 ## 守门该守的是构件契约与结构完整性。
 func _check_level_contract(level, path: String) -> void:
-	if level.get_node_or_null("Player") == null:
+	var player = level.get_node_or_null("Player")
+	if player == null:
 		_fail("%s 缺 Player（相机与重生都拿不到人）" % path)
+	elif player.get_node_or_null("DeathBurst") == null:
+		# D42：player.gd 用 @onready $DeathBurst 拿那一拍的液滴节点，少了它要到人真的
+		# 撞上尖刺才露馅 —— 正是守门该提前响的地方。
+		_fail("%s 的 Player 缺 DeathBurst（死亡那一拍会踩空）" % path)
 	if level.get_node_or_null("PlayerSpawn") == null:
 		_fail("%s 缺 PlayerSpawn（玩家会停在编辑期位置）" % path)
 	# 祭坛是一次性的，放两个就有一个永远不响应（手册 §11 已知坑）。
@@ -363,7 +541,7 @@ func _check_door_triggers(root: Node) -> void:
 		if script == null or script.resource_path != DOOR_SCRIPT:
 			continue
 		_doors_checked += 1
-		var target := _resolve_door_path(path, by_path[path].get("trigger"))
+		var target := _fold_rel_path(path, by_path[path].get("trigger"))
 		if target == "":
 			_fail("门 %s 的 trigger 是空的" % path)
 		elif not by_path.has(target):
@@ -380,14 +558,15 @@ func _collect_paths(node: Node, prefix: String, out: Dictionary) -> void:
 		_collect_paths(child, path, out)
 
 
-## 把门看到的相对路径（../ButtonPlate）折成关卡根视角的绝对路径。
-func _resolve_door_path(door_path: String, rel: NodePath) -> String:
+## 把节点看到的相对路径（../ButtonPlate、../Card）折成关卡根视角的绝对路径。
+## 门与刷卡门的接线检查共用这一条。
+func _fold_rel_path(node_path: String, rel: NodePath) -> String:
 	if rel.is_empty():
 		return ""
 	var steps := PackedStringArray()
 	for i in rel.get_name_count():
 		steps.append(String(rel.get_name(i)))
-	var base := PackedStringArray(door_path.split("/"))
+	var base := PackedStringArray(node_path.split("/"))
 	while steps.size() > 0 and steps[0] == "..":
 		steps.remove_at(0)
 		if base.size() > 0:

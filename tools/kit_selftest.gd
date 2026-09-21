@@ -1,11 +1,20 @@
 extends Node
-## 无头回归自测：只盯这次打包改动碰过的五条路径，不替代玩家的试玩。
+## 无头回归自测：只盯这次打包改动碰过的路径，不替代玩家的试玩。
 ##
 ## 1) 门的时间仍然只从 TimeReceiver 的门控 delta 累计 —— 冻结期间 `_progress` 一字不动；
 ## 2) `_apply()` 新加的"只在值变了才写"比较不能把该写的赋值挡掉（全开时碰撞体必须收零）；
 ## 3) MovingBlock 换成 travel_offset 之后，行程仍然锁在 [anchor, anchor+offset] 区间内；
 ## 4) 门的 trigger 接线：按下即开、冻结中松开只记意图不位移、解冻后续收、换源断旧连接；
 ## 5) 关门压到玩家头顶时停在头顶：不越界、不把人挤开、人让开后照常收严。
+## 6) M5 电棒：时钟只吃门控 delta，冻结即钉住；相位算式按 phase 偏移，挡路盒随通断上下层。
+## 7) M5 判死（D38）：判定不吃世界 delta —— 世界冻着、棒通着电，人站进光束照样被点名，
+##    且一次性（本条命只发一次）。
+## 8) M5 刷卡门：踩卡即拾、冻结中带卡进感应带照样认卡（D38 第 4 条）、认卡后演一整拍（D41）
+##    —— 移动被锁、幕逐行塌而碰撞体始终与画出来的同截、世界全程冻着，演完才让行并解锁。
+## 9) M5 存档与回灌（D31）：踩存档点写进常驻根 run_state、危险物点名走「保留进度的重载」、
+##    新关卡实例回灌重生位与祭坛已耗（能力直接开，不重播静止即启）。
+##    死亡那一拍（D42）：点名当帧只起演出、演完才重载且只重载一次，演出期间世界被钉在
+##    冻结（能力没开也钉得住）、尸体不再走路。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -166,14 +175,304 @@ func _ready() -> void:
 	await _frame(20)
 	_check("冻结中被头顶住的门照样不动", squeezer._progress == held)
 	TimeManager.notify_movement_intent(false)
+	await _frame(8)
 
 	hero.global_position = Vector2(squeeze_x + 300.0, -Player.COLLISION_HALF_HEIGHT)
 	await _frame(60)
 	_check("玩家让开后门收到关严", squeezer._progress == 0.0)
 	_check("关严后不再算被挡", not squeezer.is_blocked)
 
+	# —— M5 行为组 ——
+	# 先清掉上一节的人：第 9 组里 LevelBase._apply_run_state 用 get_first_node_in_group 挑玩家，
+	# 留着他会把回灌做在错的人身上。地面留着，后面几组的人都要站得稳。
+	hero.queue_free()
+	squeezer.queue_free()
+	await _frame(2)
+
+	await _test_bar_clock()
+	await _test_bar_phase()
+	await _test_frozen_kill()
+	await _test_key_door()
+	await _test_run_state()
+
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
+
+
+## 第 6 组 a：电棒时钟只吃门控 delta（D35/D38）。
+func _test_bar_clock() -> void:
+	var bar := load("res://scenes/objects/electric_bar/electric_bar.tscn").instantiate() as ElectricBar
+	bar.position = Vector2(1400.0, -300.0)
+	add_child(bar)
+	await _frame(8)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var frozen_clock: float = bar._clock
+	await _frame(20)
+	_check("冻结期间电棒时钟一分一毫不动", bar._clock == frozen_clock)
+	TimeManager.notify_movement_intent(false)
+	await _frame(20)
+	_check("解冻后电棒时钟接着走", bar._clock > frozen_clock)
+	bar.queue_free()
+
+
+## 第 6 组 b：相位算式按 phase 偏移，挡路盒随通断上下层（D35 第 3 条 / D29 第 3 条）。
+func _test_bar_phase() -> void:
+	var wall := load("res://scenes/objects/electric_bar/electric_bar.tscn").instantiate() as ElectricBar
+	wall.period = 1.0
+	wall.duty = 0.5
+	wall.phase = 0.6 # 0.6..1.0 段断电：开局就是 OFF
+	wall.blocks_when_live = true
+	wall.position = Vector2(1450.0, -300.0)
+	add_child(wall)
+	await _frame(2)
+	var blocker := wall.get_node("Blocker") as StaticBody2D
+	_check("phase=0.6 开局断电", not wall.is_live())
+	_check("断电时挡路盒退层（layer 0）", blocker.collision_layer == 0)
+	await _frame(30) # 0.5 s > 0.4 s：时钟走进通相位
+	_check("时钟走进通相位，棒变致命", wall.is_live())
+	_check("通电且 blocks_when_live，挡路盒上 time_solid 层", blocker.collision_layer == 4)
+	wall.queue_free()
+
+
+## 第 7 组：判定不吃世界 delta（D38 第 2 条）—— 世界冻着、棒通着电，人站进光束照样被点名。
+func _test_frozen_kill() -> void:
+	var killer := load("res://scenes/objects/electric_bar/electric_bar.tscn").instantiate() as ElectricBar
+	killer.period = 0.0 # ≤0 视为常通电：冻结中相位没有歧义
+	killer.position = Vector2(1500.0, -200.0)
+	add_child(killer)
+	TimeManager.notify_movement_intent(true)
+	await _frame(1)
+	var deaths: Array = []
+	killer.touched_player.connect(func(body: Node2D) -> void: deaths.append(body))
+	var victim := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	victim.position = killer.position # 站进光束中心
+	add_child(victim)
+	await _frame(3)
+	_check("世界冻着、棒通着电，人站进光束照样被判死", deaths.size() == 1)
+	await _frame(10)
+	_check("判死一次性：本条命只发一次", deaths.size() == 1)
+	TimeManager.notify_movement_intent(false)
+	victim.queue_free()
+	killer.queue_free()
+	await _frame(2)
+
+
+## 第 8 组：刷卡门 —— 拾卡、冻结中带卡进感应带即认卡（D38 第 4 条）、认卡后演一整拍（D41）：
+## 移动被锁住、幕逐行塌下去且碰撞体与画出来的同截、世界全程冻着，演完才真开、才把移动还回去。
+func _test_key_door() -> void:
+	var gate_rig := Node2D.new()
+	add_child(gate_rig)
+	var card := load("res://scenes/objects/key_pickup/key_pickup.tscn").instantiate() as KeyPickup
+	card.name = "Card"
+	card.position = Vector2(2500.0, 0.0)
+	var gate := load("res://scenes/objects/key_door/key_door.tscn").instantiate() as KeyDoor
+	gate.name = "Gate"
+	gate.position = Vector2(2600.0, 0.0)
+	gate.key = NodePath("../Card")
+	gate_rig.add_child(card)
+	gate_rig.add_child(gate)
+
+	var gate_col := gate.get_node("CollisionShape2D") as CollisionShape2D
+	var gate_rect := gate_col.shape as RectangleShape2D
+
+	var courier := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	courier.position = Vector2(2500.0, -Player.COLLISION_HALF_HEIGHT)
+	add_child(courier)
+	await _frame(3)
+	_check("玩家踩上卡即拾取（接触判定不吃世界 delta）", card.held)
+
+	# 还没认卡的那一态：实体与画出来的同宽同底、且都挡满门洞。
+	var locked: Rect2 = gate.curtain_rect()
+	_check("锁着的光幕挡满门洞且与碰撞体同一截",
+		gate_rect.size == Vector2(32.0, 96.0)
+		and locked == Rect2(-16.0, -96.0, 32.0, 96.0)
+		and absf(gate_col.position.y + gate_rect.size.y * 0.5
+			- (locked.position.y + locked.size.y)) < 0.01)
+
+	# 冻结中带卡进感应带：玩家朝门走 = 世界冻结，检测必须照常（D38 第 4 条）。
+	# 认卡**不再当场让行**（D41）：卡被吞、移动被锁，幕要演一整拍才塌完。
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	courier.position = Vector2(2570.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("冻结中带着卡进感应带照样认卡", card.consumed and not card.held)
+	_check("认卡那一帧演出才刚开始：门还没让行", not gate.is_latched)
+	var beat_start: float = gate.curtain_rect().size.y
+	_check("认卡那一帧幕还基本满着（塌下去要花时间，不是一帧）", beat_start > 85.0)
+	_check("认卡即锁住玩家移动", courier.movement_locked)
+	_check("世界此刻仍然冻结着（演出不是靠解冻走完的）", TimeManager.is_time_frozen())
+
+	# 演出中：按着方向键人也别想往前走 —— 这一拍是被保护起来的。
+	var x_at_beat: float = courier.global_position.x
+	Input.action_press(&"move_right")
+	await _frame(6)
+	_check("演出中按着右也不前进（移动锁拦的是输入，不是只拦了世界）",
+		absf(courier.global_position.x - x_at_beat) < 0.001 and courier.velocity.x == 0.0)
+	var mid: Rect2 = gate.curtain_rect()
+	_check("幕正在逐行塌下去（比认卡那一帧矮，但还没塌完）",
+		mid.size.y > 0.0 and mid.size.y < beat_start)
+	_check("塌的过程中碰撞体仍然不比画出来的短，且底边始终接地",
+		gate_rect.size.y >= mid.size.y and gate_rect.size.y - mid.size.y < 1.0
+		and absf(gate_col.position.y + gate_rect.size.y * 0.5) < 0.01)
+	_check("卡与幕共用同一条钟：此刻两边都在半路",
+		card.fly_progress() > 0.0 and card.fly_progress() < 1.0)
+	_check("世界全程冻着", TimeManager.is_time_frozen())
+
+	# 演完：幕归零、移动还回来，且卡不会比门活得久。
+	var guard := 0
+	while not gate.is_latched and guard < 120:
+		await _frame(1)
+		guard += 1
+	Input.action_release(&"move_right")
+	_check("演出在有限帧内跑完（没有卡在半途）", gate.is_latched)
+	_check("撤幕后碰撞体收零", gate_rect.size.y < 0.01)
+	_check("撤幕后不再画光幕", gate.curtain_rect().size.y == 0.0)
+	await _frame(2)
+	_check("卡与门同拍收尾（门开完时卡也飞完了）", card.fly_progress() < 0.0)
+	_check("收尾把移动还回玩家", not courier.movement_locked)
+	courier.position = Vector2(courier.global_position.x, -Player.COLLISION_HALF_HEIGHT)
+	var x_after: float = courier.global_position.x
+	Input.action_press(&"move_right")
+	await _frame(6)
+	_check("解锁后按右立刻能走（锁不是永久状态）", courier.global_position.x > x_after)
+	Input.action_release(&"move_right")
+
+	# 闩锁是一次性的：解冻一圈再冻回去，撤掉的幕也不会装回来。
+	TimeManager.notify_movement_intent(false)
+	await _frame(20)
+	TimeManager.notify_movement_intent(true)
+	await _frame(20)
+	_check("解冻再冻结都不会把幕装回去", gate.is_latched and gate_rect.size.y < 0.01)
+	TimeManager.notify_movement_intent(false)
+	courier.queue_free()
+	gate_rig.queue_free()
+	await _frame(2)
+
+
+## 第 9 组：存档点 / 死亡 / run_state 回灌（D31 + D42）。给 LevelBase 一个 Main 替身当常驻根
+## （world_root 组 + get_run_state + reload_level），重点在「死亡重载不清进度」这条分界，
+## 外加死亡那一拍：先演完再重载、演出期间世界被钉住、尸体不再走路。
+func _test_run_state() -> void:
+	var stub = Node.new()
+	var stub_script := GDScript.new()
+	stub_script.source_code = """
+extends Node
+var run_state := {}
+var reload_calls := 0
+func get_run_state() -> Dictionary:
+	return run_state
+func reload_level() -> void:
+	reload_calls += 1
+"""
+	stub_script.reload()
+	stub.set_script(stub_script)
+	stub.add_to_group(&"world_root")
+	add_child(stub)
+
+	var rig1 := _build_mini_level(stub)
+	var walker1: Player = rig1["walker"]
+	await _frame(2)
+	_check("开局能力关着（start_with_ability=false）", not TimeManager.is_ability_enabled)
+
+	walker1.global_position = Vector2(3100.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	var saved = stub.run_state.get("respawn_position")
+	_check("踩上存档点把重生位写进常驻根", saved is Vector2)
+	if saved is Vector2:
+		_check("存的是玩家位（抬过半个盒高），不是存档点原点",
+			saved == Vector2(3100.0, -Player.COLLISION_HALF_HEIGHT))
+
+	# 死亡那一拍（D42）：点名当帧只起演出，重载要等演完。按着方向键是为了确认
+	# 「尸体不再走路」而不是「恰好没人碰键盘」。判死要等物理服务器把移动后的形状冲一次，
+	# 所以这里只轮询「什么时候死」，不去赌固定帧数。
+	Input.action_press(&"move_right")
+	walker1.global_position = Vector2(3200.0, -Player.COLLISION_HALF_HEIGHT)
+	var watch := 0
+	while not walker1.is_dead and watch < 60:
+		watch += 1
+		await get_tree().physics_frame
+	_check("危险物点名即进入死亡演出", walker1.is_dead)
+	_check("刚死时不重载（重载排在演出之后）", stub.reload_calls == 0)
+	var beat := 0
+	while beat < 6:
+		beat += 1
+		await get_tree().physics_frame
+	_check("能力没开也钉得住冻结（钉住不走移动意图通道）",
+		not TimeManager.is_ability_enabled and TimeManager.is_time_frozen()
+			and TimeManager.is_frozen_overridden())
+	_check("演出中进度落在开区间", walker1.death_progress() > 0.0 and walker1.death_progress() < 1.0)
+	var visual := walker1.get_node("Visual") as Node2D
+	_check("演出中身体在收缩", visual.scale.y < 1.0)
+	var burst := walker1.get_node("DeathBurst") as DeathBurst
+	_check("爆裂液滴已挂上", burst.is_active())
+	var corpse_pos: Vector2 = walker1.global_position
+	var pinned_world_time: float = TimeManager.elapsed_world_time
+	for i in 8:
+		beat += 1
+		await get_tree().physics_frame
+	_check("按着方向键的尸体不位移", walker1.global_position == corpse_pos)
+	_check("钉住这一拍里世界时间不涨", TimeManager.elapsed_world_time == pinned_world_time)
+	Input.action_release(&"move_right")
+
+	# 演完才由 death_finished 转成下一帧的重载；时长只有 LevelBase.death_time 一个来源。
+	var guard := 0
+	while stub.reload_calls == 0 and guard < 200:
+		guard += 1
+		beat += 1
+		await get_tree().physics_frame
+	_check("演完才委托常驻根做死亡重载", stub.reload_calls == 1)
+	_check("演完液滴自己收摊", not burst.is_active())
+	_check("那一拍真的持续了一段（不是又换回瞬间重载）", beat >= 20 and beat <= 60)
+	await _frame(20)
+	_check("一次死亡只重载一次（不叠加）", stub.reload_calls == 1)
+	_check("死亡重载不清 run_state（存档点要活过这一跳）",
+		stub.run_state.has("respawn_position"))
+	(rig1["level"] as Node).queue_free()
+	await _frame(2)
+
+	# 模拟 Main.reload_level 落一个新关卡实例：回灌重生位与祭坛已耗。
+	stub.run_state["altar_spent"] = true
+	var rig2 := _build_mini_level(stub)
+	var walker2: Player = rig2["walker"]
+	var altar2 := rig2["altar"] as AbilityAltar
+	await _frame(2)
+	_check("回灌：玩家落在存档点（spawn_point 逐位）",
+		walker2.spawn_point == Vector2(3100.0, -Player.COLLISION_HALF_HEIGHT))
+	_check("回灌：能力直接开启（altar_spent 一个布尔推导，不再另存一份）",
+		TimeManager.is_ability_enabled)
+	_check("回灌：祭坛摆成已耗", altar2.is_granted)
+	var grants: Array = []
+	altar2.ability_granted.connect(func() -> void: grants.append(1))
+	walker2.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("已耗祭坛再踩不发授予信号", grants.is_empty())
+	stub.queue_free()
+
+
+## 搭一个最小关卡：祭坛 + 尖刺 + 存档点 + 玩家，挂到传入父节点下。
+## 节点经字典返回，免得用字符串路径再捞一遍。
+func _build_mini_level(parent: Node) -> Dictionary:
+	var level := load("res://scenes/levels/level_base.gd").new() as LevelBase
+	level.start_with_ability = false
+	var objects := Node2D.new()
+	objects.name = "Objects"
+	level.add_child(objects)
+	var altar := load("res://scenes/objects/ability_altar/ability_altar.tscn").instantiate() as AbilityAltar
+	altar.name = "AbilityAltar"
+	altar.position = Vector2(3000.0, 0.0)
+	objects.add_child(altar)
+	var spikes := load("res://scenes/objects/spikes/spikes.tscn").instantiate() as Spikes
+	spikes.position = Vector2(3200.0, 0.0)
+	level.add_child(spikes)
+	var checkpoint := load("res://scenes/objects/checkpoint/checkpoint.tscn").instantiate() as Checkpoint
+	checkpoint.position = Vector2(3100.0, 0.0)
+	level.add_child(checkpoint)
+	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker.position = Vector2(3050.0, -Player.COLLISION_HALF_HEIGHT)
+	level.add_child(walker)
+	parent.add_child(level)
+	return {"level": level, "altar": altar, "spikes": spikes, "checkpoint": checkpoint, "walker": walker}
 
 
 ## 门扇底边在门本地坐标下的高度（原点 = 门洞底边中心，向上为负）。

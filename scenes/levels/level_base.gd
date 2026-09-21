@@ -1,10 +1,15 @@
 class_name LevelBase
 extends Node2D
-## 关卡基类（D28）。三件事：
+## 关卡基类（D28）。四件事：
 ##
 ## 1. 把全局时间系统拉回已知状态（风险表「场景切换状态残留」）；
 ## 2. 把相机取景框交给关卡（D15）；
 ## 3. 承接两块**所有关卡都一样**的编排：祭坛授予能力（D16 静止即启）与终点区收尾（D18）。
+## 4. 死亡与存档（D31/D38/D42）：全子树扫描危险物（发 `touched_player` 即死）与存档点
+##    （发 `checkpoint_reached` 记位）；死亡走「保留 run_state 的重载」，`_ready()` 末尾
+##    回灌重生位与祭坛已耗。与祭坛/终点同一口径：构件摆进场景树就生效，零接线。
+##    D42 起死亡不当帧换场景：先叫 `player.die(death_time)` 演一拍，等它发回 `death_finished`
+##    才去委托重载 —— 时长只住在本类这一个导出项上，Player 与液滴都不另存一份。
 ##
 ## 第 3 条原来每关抄一遍：`level_01_tutorial.gd` 与 `level_template.gd` 各一份，实现还不一致
 ## （引导关写死 const、模板用导出项）。现在下沉到基类，新关只要按模板约定摆好
@@ -34,6 +39,12 @@ extends Node2D
 ## 玩家在终点停手后隔多久重开本关（秒，真实时间）。填 0 表示不自动重开，自己收尾。
 @export var goal_restart_delay: float = 1.5
 
+@export_group("Death")
+## 死亡那一拍多长（秒，D42）。判死当帧掐物理、把世界钉在冻结里、演「收缩 + 爆裂」，
+## 演完才重载回存档点。想更快就拧小，别指望填 0 能跳过这一拍 —— 跳过就又回到
+## 「碰到尖刺什么都没发生」，而这一拍的存在理由恰恰是「你死了，得让你看见」。
+@export var death_time: float = 0.55
+
 @onready var player_spawn: Marker2D = get_node_or_null("PlayerSpawn")
 
 var _handler: MovementInputHandler
@@ -41,21 +52,37 @@ var _awaiting_ability: bool = false
 var _ability_wait: float = 0.0
 var _goal_reached: bool = false
 var _goal_wait: float = 0.0
+## 死亡那一拍正在演（D42）：演完之前不换场景，也不让祭坛/终点那两段编排继续插话。
+var _dying: bool = false
+## 演出已结束、重载还没落地的那一帧。
+var _death_pending: bool = false
 
 
 func _ready() -> void:
 	TimeManager.reset_state()
 	TimeManager.set_ability_enabled(start_with_ability)
 	_place_player()
+	_apply_run_state()
 	_apply_camera_limits()
 	_grab_handler()
 	_bind_altar()
 	_bind_goal()
+	_bind_hazards()
+	_bind_checkpoints()
 
 
 ## 两段等待都走 _process 的真实 delta：它们判的是"玩家什么时候松手"，
 ## 而玩家豁免时停；用门控 delta 会变成"没松手所以世界停所以计时也停"的死结。
 func _process(delta: float) -> void:
+	# 死亡优先：都死了一帧了，别的编排没意义。危险物信号从 _physics_process 发出，
+	# 直接在信号里换场景等于在物理回调里 free 整棵关卡 —— 缓一帧到 _process 再动手。
+	# D42 起这一帧之后还有一整拍演出：重载等 player 的 death_finished 来点名。
+	if _death_pending:
+		_death_pending = false
+		_reload_level()
+		return
+	if _dying:
+		return
 	_tick_ability(delta)
 	_tick_goal(delta)
 
@@ -65,12 +92,32 @@ func _process(delta: float) -> void:
 func _place_player() -> void:
 	if player_spawn == null:
 		return
+	_set_player_start(player_spawn.global_position)
+
+
+func _set_player_start(pos: Vector2) -> void:
 	var player: Player = get_tree().get_first_node_in_group(&"player")
 	if player == null:
 		return
-	player.global_position = player_spawn.global_position
-	player.spawn_point = player_spawn.global_position
+	player.global_position = pos
+	player.spawn_point = pos
 	player.velocity = Vector2.ZERO
+
+
+## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子。
+## 能力不重播「静止即启」的演出 —— 那是第一次踩祭坛的事，复活的人早就拥有它了。
+func _apply_run_state() -> void:
+	var root := _world_root()
+	if root == null:
+		return
+	var state: Dictionary = root.call(&"get_run_state")
+	if state.has("respawn_position"):
+		_set_player_start(state["respawn_position"])
+	if state.get("altar_spent", false):
+		TimeManager.set_ability_enabled(true)
+		var altar: Node = _resolve(altar_path, &"ability_granted", "altar_path")
+		if altar != null and altar.has_method(&"mark_spent"):
+			altar.call(&"mark_spent")
 
 
 func _apply_camera_limits() -> void:
@@ -110,6 +157,32 @@ func _bind_goal() -> void:
 	if goal == null:
 		return
 	goal.connect(&"body_entered", _on_goal_body_entered)
+
+
+## 危险物与存档点不走 NodePath 接线：一关里它们是「摆几个就有几个」的消耗品，
+## 逐个拖引用摆图时漏接一个就是静默不死/静默不存。改按契约信号全子树扫描 ——
+## 与 D28 的目标一致：摆进场景树即生效，摆图的人不需要知道这里有代码契约。
+func _bind_hazards() -> void:
+	for node: Node in _find_contract_nodes(&"touched_player"):
+		node.connect(&"touched_player", _on_hazard_touched)
+
+
+func _bind_checkpoints() -> void:
+	for node: Node in _find_contract_nodes(&"checkpoint_reached"):
+		node.connect(&"checkpoint_reached", _on_checkpoint_reached)
+
+
+func _find_contract_nodes(signal_name: StringName) -> Array[Node]:
+	var found: Array[Node] = []
+	_collect_contract_nodes(self, signal_name, found)
+	return found
+
+
+func _collect_contract_nodes(node: Node, signal_name: StringName, found: Array[Node]) -> void:
+	for child in node.get_children():
+		if child.has_signal(signal_name):
+			found.append(child)
+		_collect_contract_nodes(child, signal_name, found)
 
 
 ## 路径为空 / 指向不存在的节点 → 静默跳过（本关没有这个构件是合法配置）；
@@ -165,6 +238,42 @@ func _on_goal_body_entered(_body: Node2D) -> void:
 	_goal_reached = true
 
 
+## 判死当帧不再换场景（D42）：把这一拍交给玩家去演，重载等 death_finished 来点名。
+## 同一拍里第二根危险物再点一次名也被 `_dying` 挡下 —— 死亡不叠加，只演一遍。
+func _on_hazard_touched(target: Node2D) -> void:
+	if _dying or _death_pending:
+		return
+	var player: Player = target as Player
+	if player == null:
+		return
+	_dying = true
+	player.death_finished.connect(_on_death_finished, CONNECT_ONE_SHOT)
+	player.die(death_time)
+
+
+func _on_death_finished() -> void:
+	_death_pending = true
+
+
+## 存的是「玩家该在哪里重生」而不是存档点原点 —— Checkpoint 发来的已经是抬过
+## 半个盒高的玩家位。写进常驻根的 run_state：关卡马上要整个换掉，进度不能住在里面。
+func _on_checkpoint_reached(position: Vector2) -> void:
+	var root := _world_root()
+	if root == null:
+		return
+	var state: Dictionary = root.call(&"get_run_state")
+	state["respawn_position"] = position
+
+
+## 常驻 World 根（main.tscn 的 Main，D31 的进度袋挂在它身上）。F6 直接跑关卡场景时
+## 没有它：存档与回灌静默失效，属于已知沙盒限制，与 restart_level 的行为口径一致。
+func _world_root() -> Node:
+	var root := get_tree().get_first_node_in_group(&"world_root")
+	if root != null and root.has_method(&"get_run_state"):
+		return root
+	return null
+
+
 ## 钩子：能力真正开启的那一刻。默认什么都不做，留给子类打日志或放演出。
 func _on_ability_enabled(_reason: String, _wait: float) -> void:
 	pass
@@ -179,3 +288,17 @@ func restart_level() -> void:
 		node = node.get_parent()
 	if node != null:
 		node.call(&"restart_level")
+
+
+## 死亡重载：委托 World 根的 reload_level（保留 run_state 的那个入口）。
+## 同一条父链晚绑定，理由同上。Main 缺席（F6 直跑关卡场景）时退回引擎自带的「重来当前
+## 场景」：D42 之前这里静默不动无所谓 —— 死了本来就没画面；现在死了要先钉住世界演一拍，
+## 不接住就是一具永久卡在那里的尸体。反正进度本来也不在，重来的语义对得上。
+func _reload_level() -> void:
+	var node: Node = get_parent()
+	while node != null and not node.has_method(&"reload_level"):
+		node = node.get_parent()
+	if node != null:
+		node.call(&"reload_level")
+		return
+	get_tree().reload_current_scene()

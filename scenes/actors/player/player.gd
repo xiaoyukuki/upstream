@@ -4,9 +4,16 @@ extends CharacterBody2D
 ##
 ## 永久豁免时停：本脚本所有计时一律使用真实物理 delta，绝不查询 TimeManager。
 ## 玩家是「时间旅行者」，世界静止时他照常行动 —— 这是整个机制成立的前提。
+##
+## 唯一例外是死亡那一拍（D42）：`is_dead` 之后整条物理停摆，尸体钉在死亡点上，
+## 只有「收缩 + 淡出」这一个演出还在引擎自己的固定步长上跑 —— 与 D41 同一口径，
+## 世界被钉在冻结态，演出在冻结的这一拍里跑完。判死与「什么时候重载」都不归这里。
 
 signal jumped
 signal landed(fall_speed: float)
+## 死亡那一拍演完了。LevelBase 接它去委托重载 —— 时长只有一个来源（它的 death_time），
+## 本脚本不数第二道表，于是两边不存在「谁先结束」的问题。
+signal death_finished
 
 ## 贴地时玩家碰撞盒中心在地面以上 15 px（碰撞盒 20×30）。Area2D 判的是碰撞盒是否重叠，
 ## 不是画出来的多边形，所以地面传感器的触发带必须跨过这条线。构件一律用本常量算带心：
@@ -24,6 +31,16 @@ const HEADROOM_MARGIN: float = 1.0
 ## 只认实体：terrain(1) + time_solid(4)。传感器层是 monitorable=false 的 Area2D，不该挡人。
 const HEADROOM_MASK: int = 1 | 4
 const MAX_HEADROOM_HITS: int = 4
+
+## 死亡那一拍的收缩终点（D42）：身体等比缩到 12% 而不是 0 —— 留一个「缩没了」的落点，
+## 比让它凭空消失读得清楚，而这一刻透明度已经掉到 0，实际看不见这个残核。
+const DEATH_SHRINK_MIN: float = 0.12
+## 收缩的同时往上飘 12 px（约半个身位的一半）：只缩不飘读作「被压扁」，飘起来才读作「散了」。
+const DEATH_RISE: float = 12.0
+## 前 55% 满不透明，之后线性淡到 0。收缩比淡出先完成，两条错开才不像「一起消失」。
+const DEATH_FADE_FROM: float = 0.55
+## 收缩在 60% 处就到位，剩下的 40% 只留给淡出。
+const DEATH_SHRINK_SPAN: float = 0.6
 
 @export_group("Horizontal")
 @export var move_speed: float = 260.0
@@ -60,12 +77,26 @@ var is_head_blocked: bool = false
 ## 主动推墙的方向（0 = 没推，±1 = 推向哪一侧的墙）。同样只喂给 PlayerVisual 播压平剪辑，
 ## 纯表现读数：碰撞盒、速度、冻结判定一概不碰。
 var wall_press_dir: int = 0
+## 临时移动锁（D41）：刷卡门吞卡那 0.45 秒里掐掉水平输入与起跳，让「卡从体内飞出去」
+## 有一拍不会被人走出去打断。只掐输入，不掐重力（腾空时被锁会照常落地），
+## 也不碰 notify_movement_intent —— 按着的方向键仍然把世界冻着，演出正是在这一拍里跑。
+var movement_locked: bool = false
+## 已被杀死（D42）：整条物理停摆，只跑那一拍的演出。压过 movement_locked ——
+## 死在刷卡演出里时门照样会把移动还回来，但那具尸体不该因此站起来走路。
+var is_dead: bool = false
+## 演出进度：-1 表示不在演出中（与 KeyPickup.fly_progress() 同一口径）。
+var _death_elapsed: float = -1.0
+## 这一拍多长，由 die() 的调用方（LevelBase.death_time）给 —— 时长只住一处才谈得上同拍重载。
+var _death_time: float = 0.0
 
 var _coyote_remaining: float = 0.0
 var _buffer_remaining: float = 0.0
 var _was_on_floor: bool = false
 
 @onready var _visual: Node2D = $Visual
+## 死亡那一拍的液滴（D42）。排在 Visual 之后 = 画在身体之上；挂在 Player 而不是 Visual
+## 之下，是因为 Visual 正被演出缩着，液滴不该跟着一起缩。
+@onready var _death_burst: DeathBurst = $DeathBurst
 @onready var _collision: CollisionShape2D = $CollisionShape2D
 ## 关卡要判断「玩家松手了没」（能力开启、终点收尾都靠它）时读这个属性，
 ## 不要自己 get_node("MovementInputHandler") —— 那个字符串以前在三个关卡脚本里各写一遍。
@@ -102,6 +133,11 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# 死亡那一拍：输入、重力、碰撞全停，只让演出往前走。放在最顶上是因为下面每一段
+	# 都默认「这是一个还活着的人在动」，逐条加 `if is_dead` 早晚会漏一条。
+	if is_dead:
+		_advance_death(delta)
+		return
 	_coyote_remaining = maxf(0.0, _coyote_remaining - delta)
 	_buffer_remaining = maxf(0.0, _buffer_remaining - delta)
 
@@ -129,13 +165,71 @@ func respawn() -> void:
 	_buffer_remaining = 0.0
 	is_crouching = false
 	is_head_blocked = false
+	movement_locked = false
+	is_dead = false
+	_death_elapsed = -1.0
+	_reset_visual_transform()
 	_apply_body_height(STAND_HEIGHT)
+
+
+## 被杀死（D42）。判死归 HazardBase 发信号、编排归 LevelBase，这里只回答
+## 「死了之后这一具身体长成什么样」：钉在死亡点 + 演一拍 + 把世界钉住。
+## duration 由调用方给，本脚本刻意不留第二个时长常量。
+func die(duration: float) -> void:
+	if is_dead:
+		return
+	is_dead = true
+	_death_time = maxf(duration, 0.001)
+	_death_elapsed = 0.0
+	velocity = Vector2.ZERO
+	TimeManager.set_frozen_override(true)
+	_death_burst.launch(_death_time)
+	_apply_death_transform(0.0)
+
+
+## 演出进度 0..1；-1 表示不在演出中。守门读它核对「收缩与爆裂同拍结束」。
+func death_progress() -> float:
+	if _death_elapsed < 0.0:
+		return -1.0
+	return clampf(_death_elapsed / maxf(_death_time, 0.001), 0.0, 1.0)
+
+
+## 与 `_advance_swipe()` 同一形状的计时：吃引擎自己的固定物理步长，世界那道闸截不到它，
+## 所以世界停在冻结那一拍里、演出照跑完。跑完只发一个信号，重载不归这里。
+func _advance_death(delta: float) -> void:
+	if _death_elapsed < 0.0:
+		return
+	_death_elapsed += delta
+	if _death_elapsed < _death_time:
+		_apply_death_transform(death_progress())
+		return
+	_death_elapsed = -1.0
+	_apply_death_transform(1.0)
+	death_finished.emit()
+
+
+## 收缩 + 上飘 + 淡出，三个数都写成显式的二次缓出（先窜后飘），与匀速的区别见 D41 第 6 条。
+## 算式与 tools/gen_death_preview.py 的 D 行逐字同源 —— 选型图上的位置就是实机的位置。
+func _apply_death_transform(t: float) -> void:
+	var u: float = minf(t / DEATH_SHRINK_SPAN, 1.0)
+	var k: float = 1.0 - (1.0 - u) * (1.0 - u)
+	var s: float = maxf(DEATH_SHRINK_MIN, 1.0 - (1.0 - DEATH_SHRINK_MIN) * k)
+	_visual.scale = Vector2(float(facing) * s, s)
+	_visual.position.y = -DEATH_RISE * k
+	_visual.modulate.a = 1.0 if t < DEATH_FADE_FROM \
+		else maxf(0.0, 1.0 - (t - DEATH_FADE_FROM) / (1.0 - DEATH_FADE_FROM))
+
+
+func _reset_visual_transform() -> void:
+	_visual.scale = Vector2(float(facing), 1.0)
+	_visual.position = Vector2.ZERO
+	_visual.modulate.a = 1.0
 
 
 func _try_jump() -> void:
 	# Q2：头顶被压住时不许起跳。缓冲区也一并清掉 —— 留着的话等头顶一空出来
-	# 人会莫名其妙自己弹一下。
-	if is_head_blocked:
+	# 人会莫名其妙自己弹一下。移动锁（D41）同一处理：锁期间按跳跃等于没按。
+	if is_head_blocked or movement_locked:
 		_buffer_remaining = 0.0
 		return
 	if _buffer_remaining <= 0.0:
@@ -165,8 +259,16 @@ func _apply_gravity(delta: float) -> void:
 	velocity.y = minf(velocity.y + get_gravity().y * gravity_scale * delta, max_fall_speed)
 
 
+## 水平输入轴唯一的读法。收成一处是因为移动锁必须一处不落：以前这个轴在
+## `_apply_horizontal` 与 `_update_wall_press` 各读一遍，锁散在两处迟早会漏一处。
+func _horizontal_axis() -> float:
+	return 0.0 if movement_locked else Input.get_axis(&"move_left", &"move_right")
+
+
 func _apply_horizontal(delta: float) -> void:
-	var axis: float = Input.get_axis(&"move_left", &"move_right")
+	# 轴为 0 时走下面那条摩擦分支：被锁住的人是照物理减速停住，
+	# 比把 velocity.x 钉死更不像「撞到一堵看不见的墙」。
+	var axis: float = _horizontal_axis()
 	var on_floor: bool = is_on_floor()
 	if axis != 0.0:
 		facing = 1 if axis > 0.0 else -1
@@ -195,7 +297,7 @@ func _update_wall_press() -> void:
 	wall_press_dir = 0
 	if not is_on_floor() or not is_on_wall():
 		return
-	var side: int = int(signf(Input.get_axis(&"move_left", &"move_right")))
+	var side: int = int(signf(_horizontal_axis()))
 	if side == 0:
 		return
 	for i in get_slide_collision_count():

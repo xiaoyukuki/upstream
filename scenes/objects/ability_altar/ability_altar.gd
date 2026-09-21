@@ -53,9 +53,16 @@ func _ready() -> void:
 func _on_body_entered(body: Node2D) -> void:
 	if is_granted or not body.is_in_group(&"player"):
 		return
+	mark_spent()
+	ability_granted.emit()
+
+
+## 关卡复活回灌用：把祭坛摆成「已授予」的样子但不发信号 —— 信号属于玩家第一次
+## 踩上去的演出，重载后的世界里那次演出已经发生过了（D31：run_state 只存
+## altar_spent 一个布尔，能力是否开启由它推导，不另记第二份真相）。
+func mark_spent() -> void:
 	is_granted = true
 	_visual.color = spent_color
-	ability_granted.emit()
 
 
 func _rebuild() -> void:

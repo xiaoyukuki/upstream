@@ -1,0 +1,29 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scenes/objects/electric_bar/electric_bar.gd" id="1"]
+[ext_resource type="Script" path="res://components/time_receiver.gd" id="2"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_kill"]
+size = Vector2(128, 10)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_block"]
+size = Vector2(148, 18)
+
+[node name="ElectricBar" type="Area2D"]
+collision_layer = 0
+collision_mask = 2
+monitorable = false
+script = ExtResource("1")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_kill")
+
+[node name="TimeReceiver" type="Node" parent="."]
+script = ExtResource("2")
+
+[node name="Blocker" type="StaticBody2D" parent="."]
+collision_layer = 4
+collision_mask = 0
+
+[node name="BlockerShape" type="CollisionShape2D" parent="Blocker"]
+shape = SubResource("RectangleShape2D_block")
