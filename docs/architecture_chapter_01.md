@@ -190,6 +190,8 @@ uniform sampler2D screen : hint_screen_texture, filter_linear_mipmap;
 - `TimeFreezeFilter` 的对外接口两版保持一致（订阅 `TimeManager.state_changed`），升级只换内部实现，不动关卡。
 - `layer` 定值：`TimeFreezeFilter = 100`，`PauseMenu = 200`，`DebugOverlay = 300`（原文要求滤镜低于 DebugOverlay、暂停菜单在滤镜之上）。
 
+**订正（D46，2026-09-21）**：第 2 条建议（M3 升级为 **shader 去饱和版**）已被取代 —— 落地的是 CRT 版，而且它**一点都不去饱和**（不碰饱和度，只做扫描线晶格 + 1.3 提亮 + 红蓝色散）。第 3 条「两版对外接口一致、升级只换内部实现、不动关卡」原样兑现：`state_changed` 订阅、`LAYER_INDEX = 100`、真实 delta 的指数平滑淡入都还在老位置，关卡一行没改。当年挂着的那句「`hint_screen_texture` 在 Compatibility 渲染器下需实测确认」现在有答案：**能编译**（4.6.1 stable / GLES3 Compatibility / RTX 5070 Laptop，见 D46 验证段）。
+
 ---
 
 ### D9 · 相机方案
@@ -1410,3 +1412,28 @@ M5 交付：`hazard.tscn`（尖刺 / 电流棒两种参数）、`key_pickup.tscn
 5. **传感器带不动**：`BAND_W 32` / `BAND_H 24`、带心 `-Player.COLLISION_HALF_HEIGHT` 全部原样 —— 本条是表现层，不碰判定（D38 接触即判那条契约与零件尺寸无关）。
 
 **验证**：`verify_kit` 钉两条 —— `terminal_saved` 必须**严格比 `terminal_idle` 又宽又高**（两张尺寸都从 `props.json` 现读，不是抄进检查里的字面量，所以以后谁把零件改回同尺寸会当场红），以及已存态 (21,2) 那一格必须是亮色（顶灯灯芯）。传感器带那条既有断言（`BAND_H 24` / 带心那条线）原样通过。`kit_selftest` **刻意没加新组**：本条零新行为，唯一的行为面"踩上把重生位写进常驻根"第 9 组早就钉着，为一张贴图编断言只会多一条会跟着像素改动的假红。选型图那条坑记在这里免得下次再踩：D45 之后落盘的 `terminal_saved` **本身就是 B2**，所以 B0/B1/B3 三行必须拿一张 `legacy`（32×12 的改前已存态）去演示，否则这张图会变成"用已批的方案演被否的方案"。**守门钉不住的**：三处差别到底够不够"一眼分得出存没存" —— 只有 `assets/props/preview_altar.png` 的 B 行与用户的眼睛判得了。
+
+### D46 · 冻结态的视觉符号**从「灰」换成「CRT」**：`freeze_crt.gdshader` 挂进既有 `ColorRect`，参数一字未改（linearFac 1.3 / scanLineFac 0.10 / 色散开），淡入淡出从顶点 alpha 迁到 `strength` uniform
+
+**裁定**：用户贴来一段现成 CRT fragment 代码并提出「冻结的时候用这个 shader 渲染屏幕」。我按项目那条老规矩（表现层先出图、图用真帧）先做两件事：`tools/frame_grab.tscn` 开窗抓 `level_1` 真帧，`tools/gen_freeze_filter_preview.py` 把那段算式离线复现到这些真帧上，出 A~E 五格选型图 + 同一批探针的对比度读数。用户回：**「A，取代」** —— A = 他给的那组参数原样（`linearFac 1.3` / `scanLineFac 0.10` / 色散开），"取代" = 确认冻结的符号从灰改成 CRT，明知选型图上标出的青门芯发白与削顶（离线那版 24 855 像素，实拍这版更多：31 682）仍然要它。
+
+**诊断（灰版不是一个安全基线，这条是量出来的）**：现状那层 `Color(0.5,0.5,0.5)` × alpha 0.20 把语义色**全部削暗**：`cyan/wall 2.69 → 2.18`、`amber/wall 4.44 → 3.33`、`steel/wall 3.13 → 2.49`、主角白边对墙 `9.51 → 6.36`。也就是说"换掉灰"这件事本身不亏可读性，问题全在换过去之后那 1.3 倍提亮会不会把亮部顶穿。
+
+**结论**：
+
+1. **路线不动 D8 那条**：一块全屏 `ColorRect` + `hint_screen_texture`，**不加 SubViewport、不建渲染目标、不加第二道 pass**。两条抽头（nearest / linear）指向同一张屏幕纹理，差别只在采样器 —— 想整幅糊成低分辨率必须降内部分辨率，那是被否的 E 行的代价。
+2. **淡入淡出换通道**：旧版把强度挂在 `_rect.color.a` 上，而 canvas_item 的 `fragment()` 一写 `COLOR` 就把顶点色丢了 —— 直接接上 shader 会让滤镜**硬开硬关**，画面照样"对"，只有逐帧看曲线才发现。所以强度改成 uniform `strength`，算式末尾 `mix(原图, CRT, strength)`；`strength == 0` 时整段分支跳过 = 逐位拷回屏幕。`transition_speed = 12` 与那条指数平滑一字未动（收敛约 0.58 s）。
+3. **参数就是用户那组，没有"顺手调优"**：`linearFac 1.3` / `scanLineFac 0.10` / `scanLineWidth 0.25` / `nearestFac 0.0` / 色散 `0.001` 开。他原代码里那个 `crt_enabled` 布尔总开关**没保留** —— 这一层的开关已经由 `TimeFreezeFilter` 的 `visible` 决定，材质里再放一个总开关等于同一件事两个真值来源。
+4. **接口与层序原样**（D8 第 3 条兑现）：仍然只订阅 `state_changed`，仍然 `LAYER_INDEX = 100`，仍然只读不写任何冻结判定；关卡与 `TimeManager` 一行没改。今天 `Main` 下没有 HUD，所以被滤镜吃进去的只有关卡本身；**将来 HUD 必须落在 ≥ 200**，否则会被扫描线和 1.3 提亮一起改动。
+5. **代价（实拍读数，4×4 平均，spot2/spot0 真帧）**：五对里四对**高于不冻结的原帧** —— `cyan/wall 2.69 → 3.02`、`amber/wall 4.44 → 4.53`、`steel/wall 3.13 → 3.20`、主角身体对墙 `2.14 → 2.81`；唯一降的是主角白边 `9.51 → 7.23`（仍远在 D26 那条 4.5 下限之上）。真正付的是**余量不是对比度**：31 682 个像素至少一个通道削到 255（全帧 3.4%）。具体两处：亮白钢 `(206,222,250)×1.3` 三通道全削平 → 冷白变中性白；琥珀 `(250,190,74)` 的 R、G 双通道削顶 → 指示灯发"烫黄"。**后果记死**：D29 那套「青 = 光与电 / 琥珀 = 可拾取 / 亮白钢 = 会咬人」从此**只靠色相分、不靠明度分**（实拍 amber `(255,235,91)` vs steel `(188,198,219)` 还分得开）；以后想在同一格里用"再亮一档"表达"可拾取"，在这套滤镜下走不通。
+6. **晶格 `const vec2 RESOLUTION = 320×180` 是写死的**：只在 1280×720 窗口下正好一格 = 4 设备像素 = 2 世界像素（相机 zoom 2）。窗口拉成非整数倍时这道格会跟 16 px 网格打摩尔纹。D43 已把 demo 钉成单关 + 固定窗口，这条代价今天付得起；真要支持任意窗口尺寸，改法是拿 `1.0 / SCREEN_PIXEL_SIZE` 推格数，不是把 320×180 调大调小。
+7. **死亡那一拍（D42）共用这一层** → 定帧现在也是 CRT，不再是灰。D33 那条「不新增第三种全屏色调、死亡不配独立滤镜」因此更吃重：两种状态**共用同一套符号**，区分只剩 D42 的收缩 + 爆裂与"世界本来就停着"这件事本身。这是用户"取代"二字明确接受的口径，不是实现遗漏。
+
+**实测踩到的四条**（都便宜，但都会静默咬人，写在这里免得下次重新发现一遍）：
+
+- `fragment()` 里**不许 `return`** —— Godot 着色器语言直接 `SHADER ERROR: Using 'return' in the 'fragment' processor function is incorrect`。原代码那个 `if (!crt_enabled) { COLOR = ...; return; }` 必须改成"局部变量算完、末尾一次写 COLOR"。
+- 屏幕纹理采样要用 **`SCREEN_UV`** 不是 `UV`。`UV` 是"本像素在这块 ColorRect 里的位置"，恰好铺满时两者重合，所以这条错了也不当场红 —— 一旦那块矩形挪动或不满屏就整体错位。
+- 新建 `.gdshader` 的 uid 还没被运行中的编辑器扫进缓存时，`.tscn` 里写 `uid=` 会报 `invalid UID ... using text path instead` 并回落到路径。**只写路径**，编辑器下次保存会自己补上。
+- **无头不编译着色器**（Compatibility + dummy renderer），语法错了也一声不响。所以 `tools/frame_grab.tscn` 从此兼任 shader 的编译检查：开窗跑一次、stderr 干净才算过。
+
+**验证**：四条守门全绿 —— `VERIFY DONE doors=3 failures=0`、`[kit-selftest] done failures=0`、`SPRITE SELFTEST DONE failures=0`、`TILESET SELFTEST DONE failures=0 checks=308`。`kit_selftest` 加**第 11 组**：无头不验像素，只钉材质挂着裁定那组参数、层序仍是 100，以及那条最容易静默弄死的通路 —— 强度**一帧一帧爬**（第一格非零必须 < 0.9，淡入死了就是 1.0）、单调涨到满、解冻后往下溶而不是硬关、溶到底那块矩形不让画。这一组刻意**按值等而不按帧数等**：淡入是真实 delta 的指数平滑，而无头的 process 帧不是每秒 60 拍，按帧给预算等于掷硬币（第一版就是这么红的）。开窗那条：stderr 零 shader error；同算式离线复现与实拍两帧逐通道平均差 ≤ 1.0、最大 26、`|d| ≥ 3` 只占 0.4~1.1% 的通道样本 —— 那三条近似当真帧过了一遍 GL。选型图 `assets/ui/preview_freeze_filter.png` 加 **F 行（实拍）**，与 A 行并排就是那三条近似的当场检验；灰版旧底片 `spot{0,2}_gray.png` 留在盘上当"换之前长这样"，抓帧脚本不再覆写它。另有一条抓帧器自己的坑值得记：主角的剪辑跑在**真实 delta** 上（他是时间的载体，世界冻着照旧呼吸），raw 与 filter 两张帧隔一拍 → 他的轮廓自己动了，第一次读到的 `maxdelta=250` 全是这个、不是滤镜炸了；现在开场 `set_process(false)` + `pause()` 把他钉住（与 D42 死亡那一拍同一个机关）。**守门钉不住的**：这套扫描线 + 色散好不好看（已由用户看图裁定）、窗口尺寸一变摩尔纹长什么样、以及 0.58 s 这条淡入时长实机合不合手 —— `transition_speed` 是导出项，拧它不用回来改比例。

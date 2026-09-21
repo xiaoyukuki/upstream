@@ -1,16 +1,26 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" uid="uid://co7dbky3b3n38" path="res://scenes/ui/time_freeze_filter.gd" id="1"]
+[ext_resource type="Shader" path="res://scenes/ui/freeze_crt.gdshader" id="2"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_crt"]
+shader = ExtResource("2")
+shader_parameter/strength = 0.0
+shader_parameter/scan_line_fac = 0.1
+shader_parameter/scan_line_width = 0.25
+shader_parameter/nearest_fac = 0.0
+shader_parameter/linear_fac = 1.3
+shader_parameter/aberration_enabled = true
 
 [node name="TimeFreezeFilter" type="CanvasLayer"]
 layer = 100
 script = ExtResource("1")
 
 [node name="ColorRect" type="ColorRect" parent="."]
+material = SubResource("ShaderMaterial_crt")
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0.5, 0.5, 0.5, 0)

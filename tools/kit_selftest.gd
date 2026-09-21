@@ -17,6 +17,9 @@ extends Node
 ##    冻结（能力没开也钉得住）、尸体不再走路。
 ## 10) 祭坛授予那一拍（D44）：时钟只有真实 delta 一条 —— 世界被钉在冻结里也照样从头演到完，
 ##     玩家身体那一档亮完自己退回原色，演出半路人死亡即收摊。
+## 11) 冻结态的视觉符号（D46）：灰叠加退役、换 CRT shader。无头不编译着色器，所以这一组
+##     不验像素（验像素归 tools/frame_grab.tscn 开窗那条路），只钉材质上那组裁定参数，
+##     和那条最容易静默弄死的通路 —— 强度还在一帧一帧爬与溶，不是硬开硬关。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -197,6 +200,7 @@ func _ready() -> void:
 	await _test_key_door()
 	await _test_run_state()
 	await _test_grant_beat()
+	await _test_freeze_filter()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -503,6 +507,83 @@ func _test_grant_beat() -> void:
 	await _frame(2)
 	_check("演出半路人死了当场收摊", altar2.grant_progress() < 0.0)
 	(rig2["level"] as Node).queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
+
+
+## 第 11 组：冻结态的视觉符号换成 CRT（D46）。无头下 Compatibility 不编译着色器，
+## 所以这里一格像素都不验（验像素是 `tools/frame_grab.tscn` 开窗那条路），只钉两件
+## 纯数据的事：材质真的挂上且参数是裁定那一组；以及**淡入淡出还活着**。
+## 后者是这次改动唯一会静默死掉的通路 —— 旧版靠 ColorRect 顶点色的 alpha 溶解，
+## 而 canvas_item 的 fragment() 一写 COLOR 就把顶点色丢了。接错的话滤镜变成硬开硬关，
+## 画面照样"对"，只有逐帧看强度曲线才发现，所以把它钉在这里。
+func _test_freeze_filter() -> void:
+	var filter := load("res://scenes/ui/time_freeze_filter.tscn").instantiate() as TimeFreezeFilter
+	add_child(filter)
+	await _frame(2)
+
+	var rect := filter.get_node("ColorRect") as ColorRect
+	var mat := rect.material as ShaderMaterial
+	_check("滤镜仍压在 layer 100（暂停菜单与调试面板在它之上，D8 的层序没动）",
+		filter.layer == TimeFreezeFilter.LAYER_INDEX)
+	_check("ColorRect 挂的是 ShaderMaterial（灰叠加版已退役）", mat != null)
+	if mat == null:
+		return
+	_check("材质连着 shader 文件", mat.shader != null)
+	_check("裁定那组参数在材质上：linearFac 1.3",
+		is_equal_approx(mat.get_shader_parameter("linear_fac"), 1.3))
+	_check("裁定那组参数在材质上：scanLineFac 0.10 / 宽 0.25",
+		is_equal_approx(mat.get_shader_parameter("scan_line_fac"), 0.1)
+		and is_equal_approx(mat.get_shader_parameter("scan_line_width"), 0.25))
+	_check("色散开着", bool(mat.get_shader_parameter("aberration_enabled")))
+
+	# 强度曲线：先确认在流的时间里是干净的 0，再钉住冻结看它一帧一帧爬上去。
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	TimeManager.notify_movement_intent(false)
+	await _frame(4)
+	_check("流着的时间里强度归零、那块矩形不让画",
+		filter.strength() == 0.0 and not rect.visible)
+
+	TimeManager.notify_movement_intent(true)
+	# 意图到 state_changed 之间可能隔一拍（TimeManager 在自己的处理步里改状态），
+	# 所以等的是「第一格非零」而不是「第 N 拍」。淡入死了的话这一格直接是 1.0。
+	var waited := 0
+	while filter.strength() <= 0.0 and waited < 30:
+		waited += 1
+		await get_tree().process_frame
+	_check("冻结那一刻强度在爬，不是直接顶满（淡入没死）",
+		filter.strength() > 0.0 and filter.strength() < 0.9)
+	var rising := true
+	var prev := filter.strength()
+	# 等的是值不是拍数：这条淡入是真实 delta 的指数平滑（收敛约 0.58 s），
+	# 而无头跑起来的 process 帧不是每秒 60 拍，按帧给预算等于掷硬币。
+	var climb := 0
+	while filter.strength() < 0.999 and climb < 2000:
+		climb += 1
+		await get_tree().process_frame
+		var now := filter.strength()
+		rising = rising and now >= prev
+		prev = now
+	_check("整条曲线单调不回头地涨到满", rising and filter.strength() > 0.999)
+	_check("爬满真的花了几拍（不是一帧顶满）", climb >= 5)
+	_check("满强度时矩形在画", rect.visible)
+
+	TimeManager.notify_movement_intent(false)
+	waited = 0
+	while filter.strength() >= 0.999 and waited < 30:
+		waited += 1
+		await get_tree().process_frame
+	_check("解冻后往下溶，不是硬关到零",
+		filter.strength() < 0.999 and filter.strength() > 0.0)
+	var sink := 0
+	while filter.strength() > 0.0 and sink < 2000:
+		sink += 1
+		await get_tree().process_frame
+	_check("溶到底后不让画（屏幕纹理那一遍整个跳过）",
+		filter.strength() == 0.0 and not rect.visible)
+
+	filter.queue_free()
 	TimeManager.reset_state()
 	await _frame(2)
 

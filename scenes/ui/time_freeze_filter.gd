@@ -1,29 +1,31 @@
 class_name TimeFreezeFilter
 extends CanvasLayer
-## 时停视觉反馈：全屏灰色叠加。M1/M2 用 ColorRect 版，M3 升级为 shader 去饱和版。
-## 对外接口两版一致（订阅 state_changed），升级只换内部实现，不动关卡。
+## 冻结态的视觉符号：全屏 CRT（D46 取代了 D8 的灰叠加版）。
 ##
-## 本层只做视觉，绝不参与时停判定。alpha 插值走真实 process delta，
-## 用指数平滑而非 lerpf(a, b, delta * speed) —— 后者帧率相关。
+## 本层只做视觉，绝不参与世界冻结判定 —— 这条从 D8 一路继承下来没变，
+## 对外接口也没变（仍然只订阅 state_changed），换掉的只是 ColorRect 里面那块材质。
+##
+## 强度插值走真实 process delta，用指数平滑而非 lerpf(a, b, delta * speed) —— 后者帧率相关。
+## 注意强度是喂给 shader 的 uniform，不再挂在 ColorRect 的 alpha 上：
+## canvas_item 的 fragment() 一覆盖 COLOR，顶点色就丢了，靠 alpha 淡入会变成硬开硬关。
 
 const LAYER_INDEX: int = 100
 const VISIBLE_THRESHOLD: float = 0.01
-const GRAY: Color = Color(0.5, 0.5, 0.5)
 
-@export_range(0.0, 1.0, 0.01) var gray_alpha: float = 0.20
 @export var transition_speed: float = 12.0
 
 var _current: float = 0.0
 var _target: float = 0.0
 
 @onready var _rect: ColorRect = $ColorRect
+@onready var _material: ShaderMaterial = _rect.material as ShaderMaterial
 
 
 func _ready() -> void:
 	layer = LAYER_INDEX
 	_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_rect.color = Color(GRAY, 0.0)
 	_rect.visible = false
+	_set_strength(0.0)
 	TimeManager.state_changed.connect(_on_time_state_changed)
 
 
@@ -34,7 +36,16 @@ func _process(delta: float) -> void:
 	_rect.visible = _current > VISIBLE_THRESHOLD
 	if not _rect.visible:
 		return
-	_rect.color = Color(GRAY, gray_alpha * _current)
+	_set_strength(_current)
+
+
+func strength() -> float:
+	return _current
+
+
+func _set_strength(v: float) -> void:
+	if _material != null:
+		_material.set_shader_parameter("strength", v)
 
 
 func _on_time_state_changed(_new_state: int) -> void:
