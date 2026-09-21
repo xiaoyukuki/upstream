@@ -41,6 +41,9 @@ const DEATH_RISE: float = 12.0
 const DEATH_FADE_FROM: float = 0.55
 ## 收缩在 60% 处就到位，剩下的 40% 只留给淡出。
 const DEATH_SHRINK_SPAN: float = 0.6
+## 能力入体那一拍的身体提亮（D44）。`modulate` 是乘性的，要"更亮"只能让分量 > 1；
+## g/b 抬得比 r 多，于是那一下读作泛起祭坛核心的青色，而不是整只变白。
+const GRANT_GLOW: Color = Color(1.0, 1.22, 1.35, 1.0)
 
 @export_group("Horizontal")
 @export var move_speed: float = 260.0
@@ -92,6 +95,9 @@ var _death_time: float = 0.0
 var _coyote_remaining: float = 0.0
 var _buffer_remaining: float = 0.0
 var _was_on_floor: bool = false
+## 能力入体那一拍的提亮还剩多久（D44）。总长单独存一份是为了把亮度归一化到 0~1 再衰减。
+var _grant_glow: float = 0.0
+var _grant_glow_total: float = 1.0
 
 @onready var _visual: Node2D = $Visual
 ## 死亡那一拍的液滴（D42）。排在 Visual 之后 = 画在身体之上；挂在 Player 而不是 Visual
@@ -133,6 +139,14 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# 授予那一拍的提亮（D44）。排在死亡分支**之前**：人死在演出里时，这一档亮度也要继续走完，
+	# 不然会永久停在半亮。只改 rgb、把 .a 原样带走 —— D42 的淡出写的正是同一个 Color 的 .a。
+	if _grant_glow > 0.0:
+		_grant_glow = maxf(0.0, _grant_glow - delta)
+		var k := _grant_glow / _grant_glow_total
+		var a := _visual.modulate.a
+		_visual.modulate = Color(lerpf(1.0, GRANT_GLOW.r, k), lerpf(1.0, GRANT_GLOW.g, k),
+			lerpf(1.0, GRANT_GLOW.b, k), a)
 	# 死亡那一拍：输入、重力、碰撞全停，只让演出往前走。放在最顶上是因为下面每一段
 	# 都默认「这是一个还活着的人在动」，逐条加 `if is_dead` 早晚会漏一条。
 	if is_dead:
@@ -185,6 +199,16 @@ func die(duration: float) -> void:
 	TimeManager.set_frozen_override(true)
 	_death_burst.launch(_death_time)
 	_apply_death_transform(0.0)
+
+
+## 能力入体那一拍（D44）：身体提亮一档青色再熄。这是祭坛对玩家做的**唯一**一件事 ——
+## 演出本体（核心飞行、三枚环）全在 `AbilityAltar` 里画，这里只留身体那一档。
+## 归 Player 而不塞进 `PlayerVisual`：`_visual.modulate` 这条通道由 Player 独占
+## （D42 的淡出写它的 .a），而 PlayerVisual 只负责挑剪辑，两边不该抢同一个属性。
+## duration 由调用方给，与 `die()` 同一条规矩：一个数只住一处。
+func flash_granted(duration: float) -> void:
+	_grant_glow_total = maxf(duration, 0.001)
+	_grant_glow = _grant_glow_total
 
 
 ## 演出进度 0..1；-1 表示不在演出中。守门读它核对「收缩与爆裂同拍结束」。

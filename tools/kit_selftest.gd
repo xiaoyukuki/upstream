@@ -15,6 +15,8 @@ extends Node
 ##    新关卡实例回灌重生位与祭坛已耗（能力直接开，不重播静止即启）。
 ##    死亡那一拍（D42）：点名当帧只起演出、演完才重载且只重载一次，演出期间世界被钉在
 ##    冻结（能力没开也钉得住）、尸体不再走路。
+## 10) 祭坛授予那一拍（D44）：时钟只有真实 delta 一条 —— 世界被钉在冻结里也照样从头演到完，
+##     玩家身体那一档亮完自己退回原色，演出半路人死亡即收摊。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -194,6 +196,7 @@ func _ready() -> void:
 	await _test_frozen_kill()
 	await _test_key_door()
 	await _test_run_state()
+	await _test_grant_beat()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -354,21 +357,7 @@ func _test_key_door() -> void:
 ## （world_root 组 + get_run_state + reload_level），重点在「死亡重载不清进度」这条分界，
 ## 外加死亡那一拍：先演完再重载、演出期间世界被钉住、尸体不再走路。
 func _test_run_state() -> void:
-	var stub = Node.new()
-	var stub_script := GDScript.new()
-	stub_script.source_code = """
-extends Node
-var run_state := {}
-var reload_calls := 0
-func get_run_state() -> Dictionary:
-	return run_state
-func reload_level() -> void:
-	reload_calls += 1
-"""
-	stub_script.reload()
-	stub.set_script(stub_script)
-	stub.add_to_group(&"world_root")
-	add_child(stub)
+	var stub = _make_world_root()
 
 	var rig1 := _build_mini_level(stub)
 	var walker1: Player = rig1["walker"]
@@ -447,7 +436,75 @@ func reload_level() -> void:
 	walker2.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
 	await _frame(3)
 	_check("已耗祭坛再踩不发授予信号", grants.is_empty())
+	_check("回灌只摆样子不重播那一拍", altar2.grant_progress() < 0.0)
 	stub.queue_free()
+
+
+## 第 10 组：祭坛授予那一拍（D44）。要钉的只有一件事 —— 这一拍的时钟是真实 delta，
+## 不是世界 delta：踩上去之前把世界钉在冻结（能力没开 + `set_frozen_override`，
+## 也就是「世界一定不流」的最狠组合），演出仍要从头走到尾。顺带钉两条便宜的边界：
+## 玩家身体那一档亮完自己退回原色（不留在半亮），以及半路死了当场收摊。
+func _test_grant_beat() -> void:
+	# 先等第 9 组的旧人真的离树：那些 rig 与本组共用 x=3000 那条线，还挂在树上的旧玩家
+	# 会替新人把这一祭坛的一次性授予吃掉（body_entered 只认第一个撞进来的身体）。
+	await _frame(2)
+	_make_world_root()
+	var rig := _build_mini_level(self)
+	var walker: Player = rig["walker"]
+	var altar := rig["altar"] as AbilityAltar
+	await _frame(2)
+	altar.grant_time = 0.5 # 缩短总长：守门不为等演出白耗一秒，比例仍按脚本里那三个分数走
+
+	TimeManager.set_frozen_override(true)
+	var pinned_world_time: float = TimeManager.elapsed_world_time
+	walker.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	var frames := 0
+	while altar.grant_progress() < 0.0 and frames < 40:
+		frames += 1
+		await get_tree().physics_frame
+	_check("世界钉在冻结里那一拍照样起来", altar.grant_progress() >= 0.0)
+	_check("钉住期间世界时间不涨", TimeManager.elapsed_world_time == pinned_world_time)
+	var before := altar.grant_progress()
+	await _frame(6)
+	_check("钉着冻结也在往后推进（吃的不是世界 delta）", altar.grant_progress() > before)
+	_check("钉住期间世界仍是冻结态", TimeManager.is_time_frozen() and TimeManager.is_frozen_overridden())
+
+	var visual := walker.get_node("Visual") as Node2D
+	frames = 0
+	while visual.modulate.g <= 1.0 and frames < 40:
+		frames += 1
+		await get_tree().physics_frame
+	_check("核心到位那一帧身体被提亮（modulate 分量 >1 才叫亮）", visual.modulate.g > 1.0)
+
+	var guard := 0
+	while (altar.grant_progress() >= 0.0 or visual.modulate.g > 1.0) and guard < 120:
+		guard += 1
+		await get_tree().physics_frame
+	_check("那一拍演完自己收摊", altar.grant_progress() < 0.0)
+	_check("亮完退回原色，alpha 一字没动（.a 归 D42 的淡出）", visual.modulate == Color(1, 1, 1, 1))
+	_check("整拍 + 那一档亮加起来真的持续了一段", guard >= 15 and guard <= 90)
+	(rig["level"] as Node).queue_free()
+	await _frame(2)
+
+	# 半路死了：核心不该飞进一具正在缩没的身体，当场收摊。
+	TimeManager.reset_state()
+	var rig2 := _build_mini_level(self)
+	var walker2: Player = rig2["walker"]
+	var altar2 := rig2["altar"] as AbilityAltar
+	await _frame(2)
+	walker2.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	guard = 0
+	while altar2.grant_progress() < 0.0 and guard < 20:
+		guard += 1
+		await get_tree().physics_frame
+	_check("换一具新身体踩上照样起那一拍（不钉冻结的最小组合）",
+		altar2.grant_progress() >= 0.0)
+	walker2.die(0.5)
+	await _frame(2)
+	_check("演出半路人死了当场收摊", altar2.grant_progress() < 0.0)
+	(rig2["level"] as Node).queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
 
 
 ## 搭一个最小关卡：祭坛 + 尖刺 + 存档点 + 玩家，挂到传入父节点下。
@@ -473,6 +530,27 @@ func _build_mini_level(parent: Node) -> Dictionary:
 	level.add_child(walker)
 	parent.add_child(level)
 	return {"level": level, "altar": altar, "spikes": spikes, "checkpoint": checkpoint, "walker": walker}
+
+
+## Main 的替身：常驻根（world_root 组）+ get_run_state + reload_level 计数。
+## 第 9、10 组都要一个关卡实例挂在「已经有 Main 在跑」的世界里。
+func _make_world_root():
+	var stub = Node.new()
+	var stub_script := GDScript.new()
+	stub_script.source_code = """
+extends Node
+var run_state := {}
+var reload_calls := 0
+func get_run_state() -> Dictionary:
+	return run_state
+func reload_level() -> void:
+	reload_calls += 1
+"""
+	stub_script.reload()
+	stub.set_script(stub_script)
+	stub.add_to_group(&"world_root")
+	add_child(stub)
+	return stub
 
 
 ## 门扇底边在门本地坐标下的高度（原点 = 门洞底边中心，向上为负）。

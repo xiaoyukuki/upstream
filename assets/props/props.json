@@ -38,6 +38,11 @@
     230,
     240
   ],
+  "altar_core": [
+    110,
+    230,
+    240
+  ],
   "parts": {
     "door_slat": [
       16,
@@ -100,8 +105,32 @@
       12
     ],
     "terminal_saved": [
-      32,
-      12
+      44,
+      16
+    ],
+    "altar_base": [
+      16,
+      16
+    ],
+    "altar_shaft": [
+      16,
+      16
+    ],
+    "altar_cap": [
+      16,
+      8
+    ],
+    "altar_groove": [
+      18,
+      6
+    ],
+    "altar_burn": [
+      18,
+      6
+    ],
+    "altar_core": [
+      28,
+      16
     ]
   }
 }

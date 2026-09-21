@@ -66,7 +66,7 @@ const EXPORTS := {
 	"res://scenes/objects/button_plate/button_plate.gd": ["width", "sensor_height", "press_depth"],
 	"res://scenes/objects/pendulum/pendulum.gd": ["amplitude_degrees", "period", "phase", "rod_length"],
 	"res://scenes/objects/moving_block/moving_block.gd": ["travel_offset", "block_size", "travel_speed", "block_color"],
-	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "active_color"],
+	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "grant_time"],
 	"res://scenes/objects/sensor_zone/sensor_zone.gd": ["width", "height", "band_centre_y", "visible_in_game"],
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
 	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
@@ -214,9 +214,9 @@ func _verify_ready_geometry() -> void:
 	var altar_shape = altar.get_node("CollisionShape2D")
 	if altar_shape.position != Vector2(0, BAND_CENTRE):
 		_fail("AbilityAltar band centre=%s" % str(altar_shape.position))
-	var altar_visual = altar.get_node("Visual")
-	if altar_visual.polygon[0].y > 0.0 or altar_visual.polygon[2].y > 0.0:
-		_fail("AbilityAltar 台座向地面下方生长，底边中心原点没改过来")
+	# D44：台座改由 _draw() 平铺零件画，占位 Polygon2D 留着就会画在立绘上面（同 D25 那条）。
+	if altar.get_node_or_null("Visual") != null:
+		_fail("AbilityAltar 还带着占位 Visual 节点（D44 已改 _draw 平铺零件）")
 
 	var zone = _enter("res://scenes/objects/sensor_zone/sensor_zone.tscn")
 	var zone_shape = zone.get_node("CollisionShape2D")
@@ -421,6 +421,33 @@ func _verify_props() -> void:
 	_check_color("KeyDoor.LED_LOCKED", kc["LED_LOCKED"], m["gate_led_locked"])
 	_check_color("KeyDoor.LED_LIT", kc["LED_LIT"], m["gate_led_lit"])
 	_check_color("KeyDoor.CURTAIN", kc["CURTAIN"], m["gate_curtain"])
+	# D44：祭坛那串青色从此有清单可对。旧版它写死在构件里、从来不在 props.json 上，
+	# 于是风格换了它不换 —— 这条比对就是为了让"游离的构件色"没法再复发。
+	var ac: Dictionary = (load(ALTAR_SCRIPT) as GDScript).get_script_constant_map()
+	_check_color("AbilityAltar.CORE_COLOR", ac["CORE_COLOR"], m["altar_core"])
+	var shaft := _img("altar_shaft")
+	if shaft != null and _lum(shaft, 8, 8) >= _lum(shaft, 8, 3):
+		_fail("altar_shaft 缝行不比常规行暗：石台平铺会出亮带（同 door_slat 那条）")
+	var cap := _img("altar_cap")
+	if cap != null and _lum(cap, 8, 0) <= _lum(cap, 8, 4):
+		_fail("altar_cap 顶行不比身部亮：石帽读不出被照亮")
+	var core := _img("altar_core")
+	if core != null:
+		# 取 (14,12) 那枚菱形本体，避开中心那道高光亮条 —— 亮条是近白的，判不出色相。
+		var cc := core.get_pixel(14, 12)
+		if not (cc.b > 0.7 and cc.g > 0.7 and cc.r < 0.7):
+			_fail("altar_core 菱形不是青色: %s" % str(cc))
+	# D45：已存态比未存态**宽一档也高一档** —— 这条反馈整个读法都压在多出来的尺寸上
+	# （顶灯 +15 px、地面两侧各 6 px 青边）。谁把两张零件统一成一个尺寸，这里当场响。
+	var idle := _img("terminal_idle")
+	var saved := _img("terminal_saved")
+	if idle != null and saved != null:
+		if saved.get_width() <= idle.get_width() or saved.get_height() <= idle.get_height():
+			_fail("terminal_saved 没比 terminal_idle 大一档，D45 的常读状态被裁掉了: %s vs %s"
+				% [str(saved.get_size()), str(idle.get_size())])
+		var lamp := saved.get_pixel(21, 2)
+		if not (lamp.b > 0.8 and lamp.g > 0.8):
+			_fail("terminal_saved 顶灯不亮，已存态读不出多出来那一档: %s" % str(lamp))
 
 
 func _img(pname: String) -> Image:

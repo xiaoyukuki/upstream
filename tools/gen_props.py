@@ -906,10 +906,15 @@ def make_m5_parts(p):
         paint_beam(img, p, 0, 5, 16, 8, live)
         parts[name] = img
     parts["key_card"] = part_key_card(p)
-    for name, state in (("terminal_idle", "idle"), ("terminal_saved", "saved")):
-        img = Image.new("RGBA", (32, 12), (0, 0, 0, 0))
-        paint_terminal(img, p, 16, 12, state)
-        parts[name] = img
+    idle = Image.new("RGBA", (32, 12), (0, 0, 0, 0))
+    paint_terminal(idle, p, 16, 12, "idle")
+    parts["terminal_idle"] = idle
+    # D45：已存态比未存态高 15 px、宽 12 px —— 差别全加在轮廓上，
+    # 因为旧的两张 32×12 只差屏里一条 1 px 横线，摆图视角下根本分不出"存过没存过"。
+    saved = Image.new("RGBA", (44, 16), (0, 0, 0, 0))
+    paint_terminal(saved, p, 22, 16, "saved")
+    paint_cp_saved_glow(saved, p, 22, 16)
+    parts["terminal_saved"] = saved
     return parts
 
 
@@ -937,6 +942,9 @@ def emit_parts():
         "gate_led_locked": list(g["accent2"]),
         "gate_led_lit": list(G.mix(g["accent"], (255, 255, 255), 0.5)),
         "gate_curtain": list(g["accent"]),
+        # D44：祭坛环与核心的青色。构件里那份 CORE_COLOR 常量必须等于这个 ——
+        # 旧版祭坛把一串琥珀写死在自己脚本里、从来不在清单上，本条把这条路堵上。
+        "altar_core": list(g["accent"]),
         "parts": {},
     }
     for fname, key in PART_FILES.items():
@@ -946,9 +954,306 @@ def emit_parts():
     for fname, img in make_m5_parts(g).items():
         img.save(os.path.join(out_dir, fname + ".png"))
         manifest["parts"][fname] = [img.width, img.height]
+    # D44：祭坛和 M5 那批同属 g 风格，同一个 manifest 里两个 style 的缘由见上面那条注释。
+    for fname, img in make_altar_parts(g).items():
+        img.save(os.path.join(out_dir, fname + ".png"))
+        manifest["parts"][fname] = [img.width, img.height]
     with open(os.path.join(out_dir, "props.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
-    print("emitted %d parts + props.json to %s" % (len(PART_FILES) + 8, out_dir))
+    print("emitted %d parts + props.json to %s" % (len(manifest["parts"]), out_dir))
+
+
+# ------------------------------------------------- 祭坛美术与存档点反馈选型（D44 / D45）
+# 定稿的两套已经落盘：祭坛走 `make_altar_parts()`（--emit 写 PNG + props.json），
+# 已存终端在 `make_m5_parts()` 里长到 44×16。这一节剩下的职责是**出选型图**与被否掉的
+# 候选（A2 / A3 / B1 / B3）—— 沿用 D34 那条纪律：用户是看像素批的，
+# A1 与 B2 这两行画的必须就是落盘那一份，不许另画一套长得像的。
+# 色彩分工照 D29 那张表读：青 = 光与电、琥珀 = 可拾取物、亮白钢 = 会咬人的固体、
+# 钢灰 = 未激活的静物。祭坛是"把东西交给你的机器"，卡在青与琥珀之间，三套候选各偏一头。
+# 存档点那四套不是四种画法，是四种**"如何让一次性的事件留成常读的状态"**。
+
+def blend_rect(img, box, color, alpha):
+    """把颜色**真的混进**不透明底图。ImageDraw 在 RGBA 图上是直写像素不做混合，
+    `fill=accent + (34,)` 会把那块底冲成青色；画布最后 convert("RGB") 又把 alpha 丢了，
+    于是"柔光"在选型图上全画成实心亮块。落盘的零件 PNG 不用它 —— 那里 alpha 就是产物。"""
+    x0, y0, x1, y1 = box
+    layer = Image.new("RGBA", (x1 - x0 + 1, y1 - y0 + 1), color[:3] + (int(alpha),))
+    base = img.crop((x0, y0, x1 + 1, y1 + 1)).convert("RGBA")
+    img.paste(Image.alpha_composite(base, layer), (x0, y0))
+
+
+def _paste_ground(img, part, cx, fy):
+    """按**底边中心**贴一张零件 —— 与构件的节点原点同一套约定，
+    于是 32×12 的未存态和 44×16 的已存态（D45）脚在同一条线上，选型图不会骗人。"""
+    img.paste(part, (cx - part.width // 2, fy - part.height), part)
+
+
+def make_altar_parts(p):
+    """D44 祭坛 A1 的六张零件：平铺件 base / shaft / cap，居中件 groove / burn / core。
+    选型图 `--altar` 的 A1 行与构件 `_draw()` 用的就是这一份 —— 用户是看像素批的（D34），
+    所以两边都不许另画一套。柱缝 16 周期，与瓦片同一套规矩，石台和墙摆一起缝要对得上。
+    """
+    def blank(w, h):
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        return img, ImageDraw.Draw(img)
+
+    base, db = blank(16, 16)
+    db.rectangle([0, 0, 15, 0], fill=G.lighter(p["metal"], 0.16))
+    db.rectangle([0, 1, 15, 14], fill=p["deep"])
+    db.rectangle([0, 15, 15, 15], fill=p["edge"])
+
+    shaft, ds = blank(16, 16)
+    ds.rectangle([0, 0, 15, 15], fill=p["metal"])
+    ds.rectangle([0, 8, 15, 8], fill=G.darker(p["metal"], 0.42))
+    ds.rectangle([0, 0, 0, 15], fill=G.lighter(p["metal"], 0.24))
+    ds.rectangle([15, 0, 15, 15], fill=G.darker(p["metal"], 0.35))
+
+    cap, dc = blank(16, 8)
+    dc.rectangle([0, 0, 15, 0], fill=p["lip"])
+    dc.rectangle([0, 1, 15, 7], fill=G.lighter(p["metal"], 0.26))
+
+    groove, dg = blank(18, 6)
+    dg.rectangle([0, 0, 17, 5], fill=p["screen"])
+
+    burn, dn = blank(18, 6)
+    dn.rectangle([1, 1, 16, 4], fill=G.mix(p["glass"], p["screen"], 0.45))
+
+    # 核心：柔光靠零件自带的 alpha，运行时贴在墙上由引擎混色 —— 与选型图同一条路径。
+    core, dk = blank(28, 16)
+    dk.rectangle([1, 2, 26, 14], fill=p["accent"] + (34,))
+    dk.polygon([(14, 1), (20, 8), (14, 15), (8, 8)],
+               fill=p["accent"], outline=G.lighter(p["accent"], 0.55))
+    dk.rectangle([13, 5, 15, 11], fill=G.lighter(p["accent"], 0.72))
+    return {"altar_base": base, "altar_shaft": shaft, "altar_cap": cap,
+            "altar_groove": groove, "altar_burn": burn, "altar_core": core}
+
+
+def _blit_tile(img, part, x, y, w, h):
+    """与 `components/tile_draw.gd` 的 `TileDraw.tile` 逐像素同构：从目标矩形左上角起铺，
+    右缘底缘裁余料（余料取零件**左**上那块，不是右下一块）。改了这边必须改那边。"""
+    pw, ph = part.size
+    cy = y
+    while cy < y + h:
+        th = min(ph, y + h - cy)
+        cx2 = x
+        while cx2 < x + w:
+            tw = min(pw, x + w - cx2)
+            tile = part.crop((0, 0, tw, th))
+            img.paste(tile, (cx2, cy), tile)
+            cx2 += tw
+        cy += th
+
+
+def paint_altar_steps(img, p, cx, fy, w, h, spent, parts=None):
+    """A1 阶梯石台 + 悬浮核心：底座一整条、内缩 8 px 的柱身、齐宽的石帽，
+    帽上居中一枚凹槽，槽正上方悬着青色核心 —— 那份能力本来就**不在石头上**。
+    已耗态核心没了、槽里只剩一圈烧灼青印。全部由 `make_altar_parts()` 那六张拼出。"""
+    parts = parts or make_altar_parts(p)
+    top_y = fy - h
+    x0 = cx - w // 2
+    _blit_tile(img, parts["altar_base"], x0, fy - 16, w, 16)
+    _blit_tile(img, parts["altar_cap"], x0, top_y, w, 8)
+    _blit_tile(img, parts["altar_shaft"], x0 + 8, top_y + 8, w - 16, fy - 16 - top_y - 8)
+    slot = parts["altar_burn"] if spent else parts["altar_groove"]
+    img.paste(slot, (cx - 9, top_y + 3), slot)
+    if spent:
+        return
+    core = parts["altar_core"]
+    img.paste(core, (cx - 14, top_y - 17), core)
+
+
+def paint_altar_totem(img, p, cx, fy, w, h, spent):
+    """A2 图腾柱 + 灯罩：细柱贴地、顶端一盏灯。高度靠柱子争取，横向只占 28 px，
+    适合摆在窄台或通道顶上；灯 = 那份能力，已耗就熄成玻璃色。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    head_y = fy - h
+    lit = p["glass"] if spent else p["accent"]
+    if not spent:
+        blend_rect(img, (cx - 16, head_y - 5, cx + 15, head_y + 16), p["accent"], 26)
+    bw = 28
+    d.rectangle([cx - bw // 2, fy - 10, cx + bw // 2 - 1, fy - 1], fill=p["deep"])
+    d.rectangle([cx - bw // 2, fy - 10, cx + bw // 2 - 1, fy - 9],
+                fill=G.lighter(p["metal"], 0.16))
+    d.rectangle([cx - bw // 2, fy - 1, cx + bw // 2 - 1, fy - 1], fill=p["edge"])
+    px0, px1 = cx - 7, cx + 6
+    d.rectangle([px0, head_y + 12, px1, fy - 11], fill=p["metal"])
+    d.rectangle([px0, head_y + 12, px0, fy - 11], fill=G.lighter(p["metal"], 0.24))
+    d.rectangle([px1, head_y + 12, px1, fy - 11], fill=G.darker(p["metal"], 0.35))
+    for sy in range(fy - 26, head_y + 12, -16):
+        d.rectangle([px0 + 1, sy, px1 - 1, sy], fill=G.darker(p["metal"], 0.45))
+    d.rectangle([cx - 11, head_y, cx + 10, head_y + 12], fill=G.darker(p["metal"], 0.30))
+    d.rectangle([cx - 11, head_y, cx + 10, head_y], fill=p["lip"])
+    d.rectangle([cx - 8, head_y + 3, cx + 7, head_y + 10], fill=lit)
+    d.rectangle([cx - 8, head_y + 3, cx + 7, head_y + 3], fill=G.lighter(lit, 0.40))
+
+
+def paint_altar_well(img, p, cx, fy, w, h, spent):
+    """A3 光井：地上只有一圈井口，能力是一道从井里升起来的光柱。
+    三套里零件最少的一套（两块石沿 + 一道光），也是体积最小、亮度最高的一种读法。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    jw = w // 2
+    for sx in (cx - jw, cx + jw - 8):
+        d.rectangle([sx, fy - 12, sx + 7, fy - 1], fill=p["metal"])
+        d.rectangle([sx, fy - 12, sx + 7, fy - 12], fill=p["lip"])
+        d.rectangle([sx, fy - 1, sx + 7, fy - 1], fill=p["edge"])
+    d.rectangle([cx - jw + 8, fy - 3, cx + jw - 9, fy - 2], fill=G.darker(p["deep"], 0.30))
+    d.rectangle([cx - jw, fy - 1, cx + jw - 1, fy - 1], fill=p["edge"])
+    if spent:
+        d.rectangle([cx - jw + 8, fy - 5, cx + jw - 9, fy - 4],
+                    fill=G.mix(p["glass"], p["screen"], 0.60))
+        return
+    for i in range(h - 2):
+        y = fy - 3 - i
+        k = i / float(h - 2)
+        half = max(1, int(6 * (1.0 - k * 0.6)))
+        alpha = int(205 * (1.0 - k) ** 1.5)
+        blend_rect(img, (cx - half, y, cx + half, y),
+                   G.mix(p["accent"], (255, 255, 255), 0.35 * k), alpha)
+
+
+def paint_altar_plain(img, p, cx, fy, w, h, spent):
+    """A0 现状对照：`ability_altar.gd` 现在真实画出来的东西 —— 一块实心梯形。
+    未耗 0.98/0.82/0.42 的琥珀（注意它**不在 props.json 里**，是构件自己的字面量），
+    已耗 0.3/0.28/0.24 —— 在夜光墙上基本等于消失。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    body = (77, 71, 61) if spent else (250, 209, 107)
+    d.polygon([(cx - w // 2, fy - 1), (cx + w // 2 - 1, fy - 1),
+               (cx + w // 2 - 13, fy - h), (cx - w // 2 + 13, fy - h)], fill=body)
+
+
+def paint_cp_pulse(img, p, cx, fy, rise, alpha):
+    """B1 的一次性脉冲：终端上方一枚向上的青色箭头，`rise` 是它在 0.4 s 里的高度。
+    基准高度抬到玩家头顶（本体 26 px）：踩上终端那一刻玩家就挡在终端正上方，
+    脉冲画在身体高度上等于没画。"""
+    y = fy - 32 - rise
+    a = int(alpha)
+    head = G.lighter(p["accent"], 0.45)
+    for i in range(5):
+        wdt = 12 - i * 2
+        if wdt <= 0:
+            break
+        blend_rect(img, (cx - wdt // 2, y - 4 + i, cx + wdt // 2, y - 4 + i), head, a)
+    blend_rect(img, (cx - 1, y + 1, cx + 1, y + 6), G.lighter(p["accent"], 0.72), a)
+
+
+def paint_cp_saved_glow(img, p, cx, fy):
+    """B2 的"常亮差一档"：屏整块亮 + 顶上一盏灯 + 地面两侧各一条青边。
+    三条都是**加了高度**的差别，不靠屏上那条 1 px 的线。"""
+    d = ImageDraw.Draw(img, "RGBA")
+    x0 = cx - 16
+    d.rectangle([x0 - 6, fy - 1, x0 - 1, fy - 1], fill=p["accent"])
+    d.rectangle([x0 + 32, fy - 1, x0 + 37, fy - 1], fill=p["accent"])
+    d.rectangle([x0 + 4, fy - 9, x0 + 27, fy - 3], fill=G.lighter(p["accent"], 0.42))
+    d.rectangle([x0 + 6, fy - 7, x0 + 25, fy - 5], fill=p["screen"])
+    d.rectangle([x0 + 13, fy - 15, x0 + 18, fy - 12], fill=G.darker(p["metal"], 0.20))
+    d.rectangle([x0 + 14, fy - 14, x0 + 17, fy - 13], fill=G.lighter(p["accent"], 0.70))
+
+
+def altar_sheet():
+    """祭坛与存档点反馈的选型图。底图仍是实装风格 g 的真图集 —— 在夜光墙上读不出来就白画。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, "assets", "props")
+    os.makedirs(out_dir, exist_ok=True)
+    p = G.STYLES[G.SHIPPED]
+    terrain = G.build_terrain_atlas(p)
+    decor = G.build_decor_atlas(p)
+    term = make_m5_parts(p)
+    rim = G.STYLES["g2"]["player_rim"]
+    ink = G.lighter(p["lip"], 0.10)
+    W, H, FY = 248, 140, 124
+    AW, AH = 64, 56                       # = AbilityAltar 的 width / altar_height 默认值
+    strips = []
+
+    for painter, label in (
+            (paint_altar_plain, "A0  CURRENT  flat trapezoid, amber / spent-grey"),
+            (paint_altar_steps, "A1  SHIPPED  stepped plinth + floating core"),
+            (paint_altar_totem, "A2  totem pole + lamp head (28 wide, reads by height)"),
+            (paint_altar_well, "A3  light well + rising column (fewest parts)")):
+        img = context_strip(p, terrain, decor, W, H, FY)
+        painter(img, p, 56, FY, AW, AH, False)
+        painter(img, p, 176, FY, AW, AH, True)
+        G.paste_slime(img, "idle", 2, 116, FY, False, 1, root, rim)
+        d = ImageDraw.Draw(img)
+        d.text((44, 8), "unspent", fill=ink, font=_font(12))
+        d.text((164, 8), "spent", fill=ink, font=_font(12))
+        strips.append((img, label))
+
+    # A1b：按 level1.tscn 里真实设定的尺寸（width=46.955 / altar_height=37.92）再画一遍。
+    # 平铺件必须在非 16 倍数上也对得齐 —— 这一格才是用户实际会看到的那个尺寸。
+    img = context_strip(p, terrain, decor, W, H, FY)
+    paint_altar_steps(img, p, 56, FY, 47, 38, False)
+    paint_altar_steps(img, p, 176, FY, 47, 38, True)
+    G.paste_slime(img, "idle", 2, 116, FY, False, 1, root, rim)
+    d = ImageDraw.Draw(img)
+    d.text((44, 8), "unspent", fill=ink, font=_font(12))
+    d.text((164, 8), "spent", fill=ink, font=_font(12))
+    strips.append((img, "A1b  at level_1's real 47x38 (off the 16 grid) <- what you ship"))
+
+    # D45 之后落盘的 terminal_saved **本身就是 B2**。所以被否的三行必须拿"改之前那张"来演，
+    # 否则等于用选定方案去演示被否方案。
+    legacy = Image.new("RGBA", (32, 12), (0, 0, 0, 0))
+    paint_terminal(legacy, p, 16, 12, "saved")
+    for cid, label in (("B0", "B0  CURRENT  before / swap frame / after"),
+                       ("B1", "B1  current + one-shot rising pulse"),
+                       ("B2", "B2  SHIPPED  after = extra always-on tier (part is 44x16)"),
+                       ("B3", "B3  after = beacon behind the terminal, reads at distance")):
+        img = context_strip(p, terrain, decor, W, H, FY)
+        d = ImageDraw.Draw(img)
+        for i, cx in enumerate((44, 124, 204)):
+            if i == 0:
+                _paste_ground(img, term["terminal_idle"], cx, FY)
+            else:
+                _paste_ground(img, term["terminal_saved"] if cid == "B2" else legacy, cx, FY)
+            if cid == "B1" and i == 1:
+                paint_cp_pulse(img, p, cx, FY, 2, 235)
+            if cid == "B1" and i == 2:
+                paint_cp_pulse(img, p, cx, FY, 16, 70)
+            if cid == "B3" and i == 2:
+                paint_beacon(img, p, cx, FY, "saved")
+                _paste_ground(img, legacy, cx, FY)
+            d.text((cx - 3, FY + 6), str(i + 1), fill=ink, font=_font(14))
+        G.paste_slime(img, "idle", 2, 124, FY, False, 1, root, rim)
+        strips.append((img, label))
+
+    wide = context_strip(p, terrain, decor, 496, 188, 172)
+    dw = ImageDraw.Draw(wide)
+    paint_altar_steps(wide, p, 96, 172, AW, AH, False)
+    _paste_ground(wide, term["terminal_idle"], 196, 172)
+    _paste_ground(wide, term["terminal_saved"], 300, 172)
+    G.paste_slime(wide, "run", 1, 240, 172, False, 1, root, rim)
+    dw.text((182, 6), "not saved", fill=ink, font=_font(12))
+    dw.text((276, 6), "saved (B2)", fill=ink, font=_font(12))
+    dw.text((60, 6), "altar unspent", fill=ink, font=_font(12))
+
+    gap, pad, cap = 20, 16, 22
+    strip_w = strips[0][0].width * ZOOM
+    cw = pad * 2 + strip_w * 2 + gap
+    pairs = [strips[i:i + 2] for i in range(0, len(strips), 2)]
+    cells, y = [], pad + cap
+    for pr in pairs:
+        hh = max(im.height for im, _ in pr) * ZOOM
+        cells.append((y, hh))
+        y += hh + 26 + gap
+    ch = y + wide.height * ZOOM + 26 + pad
+    canvas = Image.new("RGB", (cw, ch), (16, 20, 30))
+    d = ImageDraw.Draw(canvas)
+    d.text((pad, 6), "ALTAR ART (A0..A3)  /  CHECKPOINT FEEDBACK (B0..B3)   shipped style %s"
+           "   B rows = 1 before / 2 that frame / 3 after" % G.SHIPPED,
+           fill=ink, font=_font(14))
+    for (y0, hh), pr in zip(cells, pairs):
+        for col, (img, label) in enumerate(pr):
+            up = img.convert("RGB").resize((img.width * ZOOM, img.height * ZOOM), Image.NEAREST)
+            x = pad + col * (strip_w + gap)
+            canvas.paste(up, (x, y0))
+            d.text((x, y0 + hh + 4), label, fill=ink, font=_font(12))
+    y0 = cells[-1][0] + cells[-1][1] + 26 + gap
+    up = wide.convert("RGB").resize((wide.width * ZOOM, wide.height * ZOOM), Image.NEAREST)
+    canvas.paste(up, (pad, y0))
+    d.text((pad, y0 + up.height + 4), "panorama: can you still tell them apart at distance"
+           " <- judge this one", fill=ink, font=_font(12))
+    out = os.path.join(out_dir, "preview_altar.png")
+    canvas.save(out)
+    print("saved", out, canvas.size)
 
 
 def main():
@@ -964,6 +1269,9 @@ def main():
         return
     if "--m5door" in sys.argv:
         m5_door()
+        return
+    if "--altar" in sys.argv:
+        altar_sheet()
         return
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out_dir = os.path.join(root, "assets", "props")

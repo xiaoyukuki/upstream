@@ -23,7 +23,8 @@ var is_saved: bool = false
 
 const TEX_IDLE: Texture2D = preload("res://assets/props/terminal_idle.png")
 const TEX_SAVED: Texture2D = preload("res://assets/props/terminal_saved.png")
-## 踩踏带：终端 32 宽，带子同宽；高度沿用按钮那条带的量。
+## 踩踏带 32 宽 = idle 态终端的宽。已存态零件宽到 44 是 D45 故意的，带子不跟着长：
+## 判定与零件尺寸无关（D38），换皮不该挪动玩家能存到档的位置。
 const BAND_W: float = 32.0
 const BAND_H: float = 24.0
 
@@ -63,4 +64,7 @@ func _rebuild() -> void:
 
 func _draw() -> void:
 	var tex := TEX_SAVED if is_saved else TEX_IDLE
-	draw_texture_rect_region(tex, Rect2(-16.0, -12.0, 32.0, 12.0), Rect2(0.0, 0.0, 32.0, 12.0))
+	# 两张零件**尺寸刻意不同**（idle 32×12 / saved 44×16）：D45 的读法全靠"已存"多出来的
+	# 那 15 px 顶灯与两侧 6 px 青边，统一成一张的尺寸就等于把这条反馈裁掉。
+	# 底边中心对齐 = 与节点原点同一套约定，于是换装时脚不会跳。
+	draw_texture(tex, Vector2(-tex.get_width() * 0.5, -tex.get_height()))
