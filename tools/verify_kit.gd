@@ -14,6 +14,7 @@ const SCRIPTS := [
 	"res://scenes/objects/key_pickup/key_pickup.gd",
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
+	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://components/time_receiver.gd",
 	"res://components/hazard_base.gd",
 	"res://scenes/levels/level_base.gd",
@@ -38,6 +39,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/key_pickup/key_pickup.gd",
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
+	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://components/hazard_base.gd",
 ]
 
@@ -56,6 +58,7 @@ const SCENES := [
 	"res://scenes/objects/key_pickup/key_pickup.tscn",
 	"res://scenes/objects/key_door/key_door.tscn",
 	"res://scenes/objects/checkpoint/checkpoint.tscn",
+	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
 	"res://scenes/levels/rooms/teaching_corridor.tscn",
 	"res://scenes/levels/main.tscn",
@@ -71,6 +74,7 @@ const EXPORTS := {
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
 	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
 	"res://scenes/objects/key_door/key_door.gd": ["height", "width", "sensor_reach", "sensor_height", "key", "swipe_time"],
+	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
 	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
@@ -166,6 +170,7 @@ func _initialize() -> void:
 func _process(_delta: float) -> bool:
 	_verify_ready_geometry()
 	_verify_props()
+	_verify_afterimage()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
@@ -326,6 +331,130 @@ func _verify_m5_geometry() -> void:
 	for node in [spikes, bar, card, save_point, rig]:
 		root.remove_child(node)
 		node.free()
+
+
+## D47 残影踏板。静态这一遍钉四件，全都属于"改了不响、要到试玩才露馅"那类：
+## ① 实体切换只能走物理通道 —— 脚本里根本不该出现 `_process`（这台机器上 process 是
+##    物理的 2.4 倍，照它切换等于碰撞层随帧率抖）；② 碰撞盒跟着导出项走；
+## ③ 每格独占一份形状资源（D27 第 7 条那个"一扇门拽小另一扇"的坑）；
+## ④ 碰撞体 == 画出来的那几格：池子按 `max_steps` 建、链按 `reach / 节距` 画，默认就是
+##    8 vs 5，多余那三格两态都必须不在层上，否则冻住时是"看不见却能踩"。
+## 位置纯函数与冻结不动身由 kit_selftest 第 12 组在真帧下验。
+func _verify_afterimage() -> void:
+	var path := "res://scenes/objects/afterimage_emitter/afterimage_emitter.gd"
+	var src := FileAccess.get_file_as_string(path)
+	if src.contains("func _process("):
+		_fail("AfterimageEmitter 里出现了 _process：实体切换只能走物理通道（D47）")
+	# 只按名字捞 autoload，不写 `TimeManager.`：静态引用会让本脚本编译期依赖 autoload，
+	# 而 --script 模式下的 autoload 本来就是个"实测在、契约上不保证在"的东西。
+	var tm = root.get_node_or_null("/root/TimeManager")
+	if tm == null:
+		_fail("拿不到 /root/TimeManager，残影踏板的冻结态那条检查没法做")
+		return
+
+	var emitter = _enter("res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn")
+	if not is_equal_approx(emitter.pitch(), 80.0):
+		_fail("默认节距 %s（应 80 = 400×0.20，正好落在 16 px 网格上）" % str(emitter.pitch()))
+	if emitter.active_steps() != 5:
+		_fail("默认链上 %d 格（reach 320 / 节距 80 + 1 = 5）" % emitter.active_steps())
+	var bodies := _pool_bodies(emitter)
+	if bodies.size() != emitter.max_steps:
+		_fail("池子里 %d 格，max_steps=%d 对不上" % [bodies.size(), emitter.max_steps])
+	var shapes: Array = []
+	for body in bodies:
+		if body.collision_mask != 0:
+			_fail("格子 %s mask=%d（挡路块只被玩家读，不该去探任何东西）"
+				% [str(body.name), body.collision_mask])
+		var rect := _body_rect(body)
+		if rect == null:
+			_fail("格子 %s 没有 RectangleShape2D 子节点" % str(body.name))
+			continue
+		if rect.size != Vector2(32.0, 32.0):
+			_fail("格子碰撞盒 %s（应 32x32 = 2 个瓦片格）" % str(rect.size))
+		for other in shapes:
+			if rect == other:
+				_fail("两格共用同一份形状资源：改一格会把另一格也拽小（D27 第 7 条）")
+		shapes.append(rect)
+
+	# 流动一拍：整条链都得不在层上（穿透），且位置 == 公式值。
+	emitter._physics_process(1.0 / 60.0)
+	var clock: float = emitter.world_clock()
+	if clock <= 0.0:
+		_fail("世界在流、喂了一拍物理，世界时钟还在 %s" % str(clock))
+	for i in bodies.size():
+		if bodies[i].collision_layer != 0:
+			_fail("流动中第 %d 格还在层 %d（穿透契约破了）" % [i, bodies[i].collision_layer])
+	var n: int = emitter.active_steps()
+	for k in n:
+		if not is_equal_approx(bodies[k].position.y, emitter.step_top_y(k) + emitter.step_size * 0.5):
+			_fail("第 %d 格在 y=%s，公式要 %s（位置必须是时钟的纯函数）"
+				% [k, str(bodies[k].position.y), str(emitter.step_top_y(k) + emitter.step_size * 0.5)])
+		if not is_equal_approx(emitter.step_top_y(k + 1) - emitter.step_top_y(k), emitter.pitch()):
+			_fail("相邻两格不等距（节距 %s）" % str(emitter.pitch()))
+	if emitter.step_top_y(0) < 0.0 or emitter.step_top_y(0) >= emitter.pitch():
+		_fail("最新那格跑出出生窗口：step_top_y(0)=%s 不在 [0, 节距) 内" % str(emitter.step_top_y(0)))
+
+	# 钉住这一拍：链立刻全上 time_solid，多余格例外，且一格都不许动。
+	tm.set_frozen_override(true)
+	var before_y: Array = []
+	for body in bodies:
+		before_y.append(body.position.y)
+	emitter._physics_process(1.0 / 60.0)
+	if not is_equal_approx(emitter.world_clock(), clock):
+		_fail("冻结那一拍时钟还在走：%s → %s" % [str(clock), str(emitter.world_clock())])
+	for i in bodies.size():
+		var want: int = 4 if i < n else 0
+		if bodies[i].collision_layer != want:
+			_fail("冻结中第 %d 格 layer=%d（链上应 4= time_solid，链外多余格应 0）"
+				% [i, bodies[i].collision_layer])
+		if not is_equal_approx(bodies[i].position.y, before_y[i]):
+			_fail("冻结中第 %d 格还在动（有形时不动，这条是承载安全的柱子）" % i)
+
+	tm.reset_state()
+	emitter._physics_process(1.0 / 60.0)
+	for i in bodies.size():
+		if bodies[i].collision_layer != 0:
+			_fail("解冻后第 %d 格还压在层 %d" % [i, bodies[i].collision_layer])
+
+	# 改导出项的 setter 链路：盒子和格数都得跟着重算，摆图时才能一眼看清占多大。
+	emitter.step_size = 48.0
+	for rect in _collect_rects(emitter):
+		if rect.size != Vector2(48.0, 48.0):
+			_fail("改 step_size 后碰撞盒没跟着重算，还是 %s" % str(rect.size))
+	emitter.reach = 480.0
+	if emitter.active_steps() != 7:
+		_fail("reach 480 / 节距 80 应要 7 格，实际 %d" % emitter.active_steps())
+
+	root.remove_child(emitter)
+	emitter.free()
+
+
+## 喷嘴建的那池挡路格（运行期 add_child，按创建序 = 链上的 k 序）。TimeReceiver 也是子节点，
+## 所以按类型挑，不写死路径。
+func _pool_bodies(node: Node) -> Array:
+	var out: Array = []
+	for child in node.get_children():
+		if child is StaticBody2D:
+			out.append(child)
+	return out
+
+
+## 一格身上的碰撞盒。按类型捞，不写死路径：这一池是运行期 add_child 建的，
+## 名字改一个字就变成"硬报错、后面整段静默跳过、failures 还是 0"的假绿。
+func _body_rect(body: Node) -> RectangleShape2D:
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			return (child as CollisionShape2D).shape as RectangleShape2D
+	return null
+
+
+func _collect_rects(node: Node) -> Array:
+	var out: Array = []
+	for body in _pool_bodies(node):
+		var rect := _body_rect(body)
+		if rect != null:
+			out.append(rect)
+	return out
 
 
 ## 危险物（与 KeyDoor 的查询 Reader）共用层值：layer 0（绝不上 sensor 层 —— 玩家的

@@ -20,6 +20,9 @@ extends Node
 ## 11) 冻结态的视觉符号（D46）：灰叠加退役、换 CRT shader。无头不编译着色器，所以这一组
 ##     不验像素（验像素归 tools/frame_grab.tscn 开窗那条路），只钉材质上那组裁定参数，
 ##     和那条最容易静默弄死的通路 —— 强度还在一帧一帧爬与溶，不是硬开硬关。
+## 12) 残影踏板（D47）：冻结那一拍整条链上 time_solid 且一格不挪，松手 0.08 s 缓冲里照旧
+##     踩着，解冻即回无形；位置只是世界时钟的纯函数（新实例同拍数重跑必与首跑同相）；
+##     最后一条是真玩家站上去的承载判据 —— 冻着接得住、解冻穿得过。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -201,6 +204,7 @@ func _ready() -> void:
 	await _test_run_state()
 	await _test_grant_beat()
 	await _test_freeze_filter()
+	await _test_afterimage()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -586,6 +590,116 @@ func _test_freeze_filter() -> void:
 	filter.queue_free()
 	TimeManager.reset_state()
 	await _frame(2)
+
+
+## 第 12 组：残影踏板（D47）。钉的全是"改了不响、要到试玩才露馅"那几件：冻结那一拍整条
+## 链上 time_solid 且一格不挪（有形时不动 = 承载安全那根柱子）；松手那 0.08 s 缓冲里照旧
+## 踩着（这条玩家直接摸得到，且它证明实体只跟状态机走、不跟帧走）；解冻即回无形。
+## 位置纯函数那一条用"新实例同拍数重跑必与首跑同相"来验 —— 只钉公式相等是拿代码验代码，
+## 验不出相位里混进了出生时刻这类旁路状态。最后一档是真玩家站上去：上面全绿也证明不了
+## "能踩"，而能踩是这个构件的立身之本。像素照旧不归无头管（D46 同规矩）。
+func _test_afterimage() -> void:
+	var rig := Node2D.new()
+	rig.name = "AfterimageRig"
+	add_child(rig)
+	var nozzle := Vector2(2000.0, -400.0)
+	var emitter := _afterimage_instance(rig, nozzle)
+	TimeManager.reset_state()
+	await _frame(30)
+	var rungs := _afterimage_rungs(emitter)
+	var active := emitter.active_steps()
+	_check("默认参数：链上 5 格、池子里 8 格（多出来那 3 格永远不该成平台）",
+		active == 5 and rungs.size() == 8)
+	var tops30: Array = []
+	for k in active:
+		tops30.append(emitter.step_top_y(k))
+	var drift := 0.0
+	for k in active:
+		drift = maxf(drift, absf(rungs[k].position.y - (tops30[k] + emitter.step_size * 0.5)))
+	_check("流 30 拍后逐格位置仍等于公式值（最大偏差 %s px）" % str(drift), drift < 0.01)
+
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var clock_frozen := emitter.world_clock()
+	var still: Array = []
+	for k in active:
+		still.append(rungs[k].position.y)
+	await _frame(12)
+	var slid := 0.0
+	for k in active:
+		slid = maxf(slid, absf(rungs[k].position.y - still[k]))
+	_check("冻结 12 拍：世界时钟一格没走", emitter.world_clock() == clock_frozen)
+	_check("冻结 12 拍：整条链没挪（最大 %s px）" % str(slid), slid == 0.0)
+	_check("冻结：链上 5 格都在 time_solid(4)、池里多余 3 格都不在",
+		_afterimage_layers(rungs, active, true))
+
+	TimeManager.notify_movement_intent(false)
+	await _frame(2)
+	_check("松手 2 拍还在缓冲里、链照旧踩着（解冻不是立即的）",
+		TimeManager.is_releasing() and emitter.is_solid())
+	await _frame(10)
+	_check("缓冲走完：链回无形、时钟重新走",
+		not emitter.is_solid() and emitter.world_clock() > clock_frozen)
+	_check("无形时处处不在层上（这才叫穿得过去）", _afterimage_layers(rungs, 0, false))
+
+	# 承载：脚底对准第 3 格的踩面。30 高的盒顶不到上一格的底边（差 18 px，D47 那条几何）。
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var stand_y: float = emitter.global_position.y + emitter.step_top_y(2)
+	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker.position = Vector2(emitter.global_position.x, stand_y - Player.COLLISION_HALF_HEIGHT)
+	rig.add_child(walker)
+	await _frame(20)
+	_check("冻住的格接得住一个玩家（20 拍没下沉）",
+		absf(walker.position.y - (stand_y - Player.COLLISION_HALF_HEIGHT)) < 1.0)
+	TimeManager.reset_state()
+	# 40 拍而不是 20：无头这一跑物理拍不是整整 1/60，20 拍只落下一个身位的大半，
+	# 差的那几像素是自由落体的时间不够，不是"没穿过去"。
+	await _frame(40)
+	_check("解冻后同一格穿得过去（人已掉到踩面以下一个身位）",
+		walker.position.y > stand_y + Player.STAND_HEIGHT)
+
+	# 回灌同相：整机换掉（重载就是一个新实例），同样 30 拍必须回到首跑那一模一样的相位。
+	emitter.queue_free()
+	walker.queue_free()
+	await _frame(2)
+	var second := _afterimage_instance(rig, nozzle)
+	TimeManager.reset_state()
+	await _frame(30)
+	var resync := 0.0
+	for k in second.active_steps():
+		resync = maxf(resync, absf(second.step_top_y(k) - tops30[k]))
+	_check("新实例同拍数重跑，链与首跑同相（最大 %s px）" % str(resync), resync < 4.0)
+
+	rig.queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
+
+
+func _afterimage_instance(rig: Node, at: Vector2) -> AfterimageEmitter:
+	var emitter := load("res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn") \
+		.instantiate() as AfterimageEmitter
+	emitter.position = at
+	rig.add_child(emitter)
+	return emitter
+
+
+## 那一池挡路格是运行期 add_child 建的，按创建序就是链上的 k 序。走 get_children 而不是
+## 直读 `_bodies`：字段一改名后者是硬报错，后面整段静默跳过而 failures 还是原样。
+func _afterimage_rungs(emitter: AfterimageEmitter) -> Array:
+	var out: Array = []
+	for child in emitter.get_children():
+		if child is StaticBody2D:
+			out.append(child)
+	return out
+
+
+func _afterimage_layers(rungs: Array, active: int, want_solid: bool) -> bool:
+	for i in rungs.size():
+		var want: int = 4 if (want_solid and i < active) else 0
+		if (rungs[i] as StaticBody2D).collision_layer != want:
+			return false
+	return true
 
 
 ## 搭一个最小关卡：祭坛 + 尖刺 + 存档点 + 玩家，挂到传入父节点下。
