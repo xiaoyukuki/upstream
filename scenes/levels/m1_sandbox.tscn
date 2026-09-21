@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://b4y2lwvd2kd7k" path="res://scenes/levels/level_base.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/objects/platform/platform.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/objects/test_cube/test_cube.tscn" id="3"]
-[ext_resource type="PackedScene" path="res://scenes/actors/player/player.tscn" id="4"]
+[ext_resource type="PackedScene" uid="uid://mrc12mewuqnm" path="res://scenes/actors/player/player.tscn" id="4"]
 
 [node name="M1Sandbox" type="Node2D" unique_id=1680881139]
 script = ExtResource("1")
