@@ -59,6 +59,7 @@ var _death_pending: bool = false
 
 
 func _ready() -> void:
+	_warn_no_world_root()
 	TimeManager.reset_state()
 	TimeManager.set_ability_enabled(start_with_ability)
 	_place_player()
@@ -266,12 +267,20 @@ func _on_checkpoint_reached(position: Vector2) -> void:
 
 
 ## 常驻 World 根（main.tscn 的 Main，D31 的进度袋挂在它身上）。F6 直接跑关卡场景时
-## 没有它：存档与回灌静默失效，属于已知沙盒限制，与 restart_level 的行为口径一致。
+## 没有它 —— 这条不再只是"少个滤镜"的沙盒限制，见 _warn_no_world_root()。
 func _world_root() -> Node:
 	var root := get_tree().get_first_node_in_group(&"world_root")
 	if root != null and root.has_method(&"get_run_state"):
 		return root
 	return null
+
+
+## D31 的进度链整条住在常驻根上，F6 直跑时它不在场：存档点不记位置、死亡直接回出生点，
+## 而且一声不吭。光看画面区分不出"存档点坏了"和"根本没走这条链"，所以开局响一次。
+func _warn_no_world_root() -> void:
+	if _world_root() != null:
+		return
+	push_warning("无常驻根（F6 直跑关卡场景？）：存档点与死亡回档不生效。要验这两条请用 F5，或把 Main.level_scene 指向本关")
 
 
 ## 钩子：能力真正开启的那一刻。默认什么都不做，留给子类打日志或放演出。

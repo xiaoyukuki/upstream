@@ -6,13 +6,16 @@ extends Node
 ## 切换不会打断滤镜过渡，也不必每个关卡重复实例化 overlay。
 ## 第一章只有一个关卡，但 M4 会有 3~5 个谜题关，届时这个结构直接受益。
 
-## 引导关是正式入口。M1 沙盒改由「打开其场景 + F6」单独运行，仍是手感调试场。
+## 没指路时跑这一张：引导关。当前 demo 阶段的正式入口由 `main.tscn` 的 `level_scene`
+## 指向 `scenes/levels/level_1/`，本常量退为兜底。M1 沙盒仍由「打开其场景 + F6」单独运行。
 const INITIAL_LEVEL: PackedScene = preload("res://scenes/levels/level_01_tutorial.tscn")
 const FPS_CAP: int = 30
 
-## 调试自己新搭的关卡时把这一项指向那张场景，留空即走引导关。
+## 把这一项指向要跑的关卡场景（当前 demo = level_1/level1.tscn），留空即走上面的兜底关。
 ## 为什么不用 F6 直接跑关卡场景：F6 跑的是当前打开的场景，绕过了 main.tscn，
-## 灰滤镜与调试面板都挂在 Main 下，于是运行时什么都看不到，像是功能没生效。
+## 于是灰滤镜与调试面板都看不到（它们挂在 Main 下），更要紧的是 `run_state` 不在场 ——
+## 存档点不记位置、死亡直接回出生点（`LevelBase._warn_no_world_root()` 会在开局警告一次）。
+## 需要这条链为真时，指这里而不是 F6。
 @export var level_scene: PackedScene
 
 var _current_scene: PackedScene

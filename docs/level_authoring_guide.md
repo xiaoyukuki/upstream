@@ -168,9 +168,9 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 
 | 怎么跑 | 结果 |
 |---|---|
-| F5 | 跑 `main.tscn` → 装载 `INITIAL_LEVEL`（引导关）。有灰滤镜与调试面板 |
-| 选中 Main 根 → `level_scene` 指向你的关 | F5 跑你的关，overlay 齐全。**推荐** |
-| F6 | 只跑当前打开的场景，绕过 Main → 没有灰滤镜、没有调试面板、按 R 重开无效。适合快速验几何 |
+| F5 | 跑 `main.tscn` → 装载 `Main.level_scene`。**当前 demo 已把它指向 `scenes/levels/level_1/level1.tscn`**；留空时退到 `INITIAL_LEVEL`（引导关）。有灰滤镜与调试面板 |
+| 选中 Main 根 → `level_scene` 指向你的关 | F5 跑你的关，overlay 与 `run_state` 齐全。**推荐** |
+| F6 | 只跑当前打开的场景，绕过 Main → 没有灰滤镜、没有调试面板、按 R 重开无效；**更要紧的是 `run_state` 整条不在场：踩存档点不记位置、死了直接回出生点，且只在开局 `push_warning` 一次**（D31/D42 之后这条不再是"少个滤镜"那么无害）。适合快速验几何，不适合验进度 |
 
 日志：`C:\Users\28401\AppData\Roaming\Godot\app_userdata\upstream\logs\godot.log`（每次启动覆写，上一份归档成带时间戳的同名文件）。
 关卡前缀 `[m2]` / `[level]`，字段含义：`plate=true presses=3 world=12.4` 里 `world` 是**世界时间**（冻结期间不走），正是"玩家花了多久"的度量。

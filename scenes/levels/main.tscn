@@ -3,9 +3,11 @@
 [ext_resource type="Script" uid="uid://k4sqn7ygx2r6" path="res://scenes/levels/main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/time_freeze_filter.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/debug_overlay.tscn" id="3"]
+[ext_resource type="PackedScene" uid="uid://dnputv4h3w5ih" path="res://scenes/levels/level_1/level1.tscn" id="4"]
 
 [node name="Main" type="Node" unique_id=1311503015]
 script = ExtResource("1")
+level_scene = ExtResource("4")
 
 [node name="LevelContainer" type="Node2D" parent="." unique_id=576992852]
 
