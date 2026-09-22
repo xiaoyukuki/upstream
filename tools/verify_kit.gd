@@ -16,6 +16,7 @@ const SCRIPTS := [
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
+	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://components/time_receiver.gd",
 	"res://components/hazard_base.gd",
 	"res://scenes/levels/level_base.gd",
@@ -42,6 +43,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
+	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://components/hazard_base.gd",
 ]
 
@@ -62,6 +64,7 @@ const SCENES := [
 	"res://scenes/objects/key_door/key_door.tscn",
 	"res://scenes/objects/checkpoint/checkpoint.tscn",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
+	"res://scenes/objects/fall_zone/fall_zone.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
 	"res://scenes/levels/rooms/teaching_corridor.tscn",
 	"res://scenes/levels/main.tscn",
@@ -79,6 +82,7 @@ const EXPORTS := {
 	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
 	"res://scenes/objects/key_door/key_door.gd": ["height", "width", "sensor_reach", "sensor_height", "key", "swipe_time"],
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
+	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
@@ -104,6 +108,7 @@ const PISTON_SCRIPT := "res://scenes/objects/piston_block/piston_block.gd"
 const SENSOR_SCRIPT := "res://scenes/objects/sensor_zone/sensor_zone.gd"
 const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
 const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
+const FALLZONE_SCRIPT := "res://scenes/objects/fall_zone/fall_zone.gd"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
 
@@ -113,6 +118,9 @@ var _failures: int = 0
 var _doors_checked: int = 0
 ## 活塞是可选构件，所以这里只记账不设门槛：扫到几块报几块，一块没有也不算配置错误。
 var _pistons_checked: int = 0
+## 坠落带同理只报计数（D52）：哪一关需要、要铺多宽都是摆图的决定，守门钉死它只会
+## 把「这关根本没有坑」也判成 FAIL。
+var _fallzones_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -169,6 +177,7 @@ func _initialize() -> void:
 		_check_level_contract(level, path)
 		_doors_checked += _check_trigger_wiring(level, path, DOOR_SCRIPT, "门")
 		_pistons_checked += _check_trigger_wiring(level, path, PISTON_SCRIPT, "活塞")
+		_fallzones_checked += _count_by_script(level, FALLZONE_SCRIPT)
 		_check_level_hazards(level, path)
 		_check_key_wiring(level, path)
 		level.free()
@@ -181,10 +190,12 @@ func _process(_delta: float) -> bool:
 	_verify_props()
 	_verify_afterimage()
 	_verify_piston()
+	_verify_fall_zone()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
-	print("VERIFY DONE doors=%d pistons=%d failures=%d" % [_doors_checked, _pistons_checked, _failures])
+	print("VERIFY DONE doors=%d pistons=%d fallzones=%d failures=%d"
+		% [_doors_checked, _pistons_checked, _fallzones_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -542,6 +553,33 @@ func _verify_piston() -> void:
 	root.remove_child(twin)
 	piston.free()
 	twin.free()
+
+
+## D52 坠落带。钉的三件全是「改了不响、要到试玩才露馅」：① **原点=顶边中心**这条约定，
+## 家族里只有它反过来（别的构件都是底边中心），摆歪半格就是"人还能继续掉"或者
+## "正常落地被误判死"；② 层契约与 `touched_player` —— 上了 sensor 层或改成可被探测，
+## 玩家的头顶净空查询会把这条带子读成实体，而少发那个信号则整关自动接线收不到它，
+## 坠落即死静默不生效；③ 改 width/depth 后盒子跟着重算，否则编辑期画的带子和真判死的
+## 带子是两截。掉进带子后真的回存档点那条归 kit_selftest 第 15 组在真物理里验。
+func _verify_fall_zone() -> void:
+	var zone = _enter("res://scenes/objects/fall_zone/fall_zone.tscn")
+	_check_area_layers(zone, "FallZone", 0)
+	if not zone.has_signal("touched_player"):
+		_fail("FallZone 不发 touched_player：LevelBase 按信号名接线收不到它，坠落即死整条不生效")
+	var col: CollisionShape2D = zone.get_node("CollisionShape2D")
+	var want := Vector2(zone.width, zone.depth)
+	if col.shape.size != want:
+		_fail("FallZone 默认盒 %s（应 %s = width x depth）" % [str(col.shape.size), str(want)])
+	if col.position != Vector2(0.0, zone.depth * 0.5):
+		_fail("FallZone 盒心 %s（应 (0,%s)：原点不再是顶边中心，带子整体偏了半深）"
+			% [str(col.position), str(zone.depth * 0.5)])
+	zone.depth = 512.0
+	zone.width = 64.0
+	if col.shape.size != Vector2(64.0, 512.0) or col.position != Vector2(0.0, 256.0):
+		_fail("改 width/depth 后没整组重算：%s @ %s（应 64x512 @ (0,256)）"
+			% [str(col.shape.size), str(col.position)])
+	root.remove_child(zone)
+	zone.free()
 
 
 func _count_areas(node: Node) -> int:

@@ -27,11 +27,20 @@ extends Node
 ##     冻结即停在当前伸出量、松开只记意图；收回快过伸出且把落脚点从脚下抽干（人掉下去不是
 ##     被带着沉进地里）；行程上有人时**挤开**他，他背后有墙则他自己被挡住、方块跟着停在接触面
 ##     上走不满行程 —— 于是挤压不发生，且顶住期间不攒位移。
+## 14) 粘性进度（D51）：祭坛「已耗」由游戏代码真的写进 run_state（不是守门替它写），
+##     存档点全关卡只一台激活，且死亡重载后亮的还是死前那一台。
+## 15) 坠落带（D52）：掉出世界这条路从无兜底改成有一根线 —— 带子只认玩家且一条命只发一次；
+##     走的是**保留进度**的死亡重载而不是清空进度的主动重开，于是掉下去回的是最近那台存档点；
+##     判据不吃世界 delta，冻着往下落照样被接住。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
 const TAG := "[kit-selftest]"
 const BLOCK_ANCHOR := Vector2(500, -200)
+## 第 15 组生产链用：把整个关卡实例抬到半空，脚下才算真的没有底。
+## 不抬不行 —— 第 5 节那块地面的顶边正好落在 y=0、铺满 x -800..3200，存档点那一排（x 650~900）
+## 就摆在它上面，人在那儿是"站着"，坠不出东西给网接。
+const OVER_VOID := Vector2(0.0, -600.0)
 
 var _fails: int = 0
 
@@ -211,6 +220,7 @@ func _ready() -> void:
 	await _test_afterimage()
 	await _test_piston()
 	await _test_sticky_progress()
+	await _test_fall_zone()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -990,6 +1000,142 @@ func _test_sticky_progress() -> void:
 	await _frame(2)
 
 
+## 第 15 组：坠落带（D52）。三条钉 + 一条生产链，全都对着同一次报告：「掉出世界后没回到存档点」。
+## 根因不在复活代码写坏了，而在**这条路上压根没有判死**：没有底、人一直落，先撞到的却是终点区
+## 的「路过即算」→ 那条走的是主动重开（清空 run_state）→ 于是回的是出生点。所以钉的顺序照抄病历：
+## ① 带子只认玩家、一条命内只发一次；② 换个非玩家 body 上到玩家那一层，一个信号都不许发；
+## ③ 世界冻着时往下落照样被接住（判据不吃世界 delta，D38 第 2 条同一条口径）；
+## ④ 生产链：踩住存档点 → 掉进带子 → 演完死亡那一拍 → 关卡委托的是**保留进度**的 reload_level
+##    而不是清空进度的 restart_level → 换新的关卡实例后重生位仍指回那一台、且仍只那一台亮。
+func _test_fall_zone() -> void:
+	var leftovers := get_tree().get_nodes_in_group(&"player")
+	_check("开跑前场上没有残留玩家（%d 个）" % leftovers.size(), leftovers.is_empty())
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+
+	# fixture 全摆在 x 8000 之外：前面几组留了两块地面在下头（第 5 节 x -800..3200、
+	# 第 13 节 x 3500..6500，顶边都落在 y=0），人摆在那上面是"站得住"，坠不了。
+	var rig := Node2D.new()
+	rig.name = "FallRig"
+	add_child(rig)
+
+	# —— ① 进带即点名，且本条命只发一次 ——
+	var net := _fall_zone_instance(rig, Vector2(8000.0, 0.0), 256.0, 512.0)
+	await _frame(2)
+	var hits: Array = []
+	net.touched_player.connect(func(body: Node2D) -> void: hits.append(body))
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	hero.position = Vector2(8000.0, 60.0) # 已经在带子里（顶边 y=0，往下 512）
+	rig.add_child(hero)
+	await _frame(3)
+	_check("玩家进带恰好一次 touched_player，且点名的就是他", hits.size() == 1 and hits[0] == hero)
+	await _frame(8)
+	_check("人继续待在带里不叠发（一次性闩锁，重置只属于关卡重载）", hits.size() == 1)
+	hero.queue_free()
+	net.queue_free()
+	await _frame(2)
+
+	# —— ② 非玩家 body 不算：故意摆在玩家那一层（2），让带子的 mask 真的捞到它 ——
+	var sieve := _fall_zone_instance(rig, Vector2(8100.0, 0.0), 256.0, 512.0)
+	var rock_hits: Array = []
+	sieve.touched_player.connect(func(body: Node2D) -> void: rock_hits.append(body))
+	var rock := StaticBody2D.new()
+	rock.collision_layer = 2
+	var rock_shape := CollisionShape2D.new()
+	var rock_rect := RectangleShape2D.new()
+	rock_rect.size = Vector2(20.0, 30.0) # 与玩家同尺寸：层对了、形状也对了，只有身份不对
+	rock_shape.shape = rock_rect
+	rock.add_child(rock_shape)
+	rock.position = Vector2(8100.0, 60.0)
+	rig.add_child(rock)
+	await _frame(6)
+	_check("非玩家 body 就算占了玩家那一层也不发（按 player 组挑人）", rock_hits.is_empty())
+	sieve.queue_free()
+	rock.queue_free()
+	await _frame(2)
+
+	# —— ③ 冻着往下落，带子照样接得住 ——
+	var catcher := _fall_zone_instance(rig, Vector2(8200.0, 300.0), 256.0, 512.0)
+	var cold_hits: Array = []
+	catcher.touched_player.connect(func(body: Node2D) -> void: cold_hits.append(body))
+	var dropper := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	dropper.position = Vector2(8200.0, 0.0) # 顶边线上方 285 px（盒底在 15）
+	rig.add_child(dropper)
+	TimeManager.notify_movement_intent(true)
+	await _frame(1)
+	var guard := 0
+	while cold_hits.is_empty() and guard < 240:
+		guard += 1
+		await get_tree().physics_frame
+	_check("世界冻着时掉进带子照样被判死（第 %d 拍接到人，此时 y=%s）"
+		% [guard, str(snappedf(dropper.global_position.y, 0.01))],
+		cold_hits.size() == 1 and cold_hits[0] == dropper)
+	TimeManager.notify_movement_intent(false)
+	dropper.queue_free()
+	rig.queue_free()
+	TimeManager.reset_state()
+	await _frame(3)
+
+	# —— ④ 生产链：这张网要能在真关卡里把死亡送回最近那台存档点 ——
+	var root = _make_world_root()
+	# 带子必须在关卡进树**之前**就挂进子树：_bind_hazards() 是在 _ready() 里按契约信号扫全树的，
+	# 事后 add_child 的网它看不见 —— 这条正是「摆进场景树即生效，零接线」那个口径。
+	# 整环摆到半空：存档点那一排只能摆在 x 650~900（fixture 的名字按 x 取），而第 5 节那块
+	# 地面的顶边正落在 y=0 —— 不抬起来，人在 B 上是站着而不是在掉，这张网也就没东西可接。
+	# 必须在进树之前一次摆好：事后搬关卡根，物理服务器会在同一拍里把 Area2D 搬上去而玩家的
+	# 刚体变换还留在旧位置，那一拍读到的重叠是假的 —— 人凭空被判死，本组第一跑就是这么红的。
+	var ring := _build_checkpoint_ring(root, 240.0, OVER_VOID)
+	var terminals: Array = ring["terminals"]
+	var walker: Player = ring["hero"]
+	await _frame(2)
+	walker.global_position = Vector2(800.0, OVER_VOID.y - Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("掉下去之前先踩住 B", terminals[1].is_active and _active_count(terminals) == 1)
+	guard = 0
+	while not walker.is_dead and guard < 240:
+		guard += 1
+		await get_tree().physics_frame
+	_check("坠落把这条命判掉（第 %d 拍，落到 y=%s 时接住）"
+		% [guard, str(snappedf(walker.global_position.y, 0.01))], walker.is_dead)
+	guard = 0
+	while root.reload_calls == 0 and guard < 120:
+		guard += 1
+		await get_tree().physics_frame
+	_check("演完死亡那一拍后委托的是 reload_level（保留 run_state 那条）", root.reload_calls == 1)
+	_check("全程没有走 restart_level（那条按设计清空进度，是这次误诊的来源）",
+		root.restart_calls == 0)
+	_check("run_state 两个键都还留着",
+		root.run_state.has("respawn_position") and root.run_state.has("respawn_marker"))
+	var saved: Vector2 = root.run_state.get("respawn_position")
+	_check("存下的那一格就在 B 那一列（不是英雄编辑期站的那一列）",
+		absf(saved.x - 800.0) < 0.01 and absf(saved.y - (OVER_VOID.y - Player.COLLISION_HALF_HEIGHT)) < 8.0)
+
+	(ring["level"] as Node).queue_free()
+	await _frame(3)
+	var ring2 := _build_checkpoint_ring(root, -1.0, OVER_VOID) # 新实例，不带网：这一次只看回灌
+	var t2: Array = ring2["terminals"]
+	var revived: Player = ring2["hero"]
+	await _frame(3)
+	_check("换了新的关卡实例，重生位正是 run_state 里记下的那一格（%s）" % str(saved),
+		revived.spawn_point == saved)
+	_check("重载后亮的还是那一台，且仍然只它一台", t2[1].is_active and _active_count(t2) == 1)
+	root.queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
+
+
+## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒
+## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
+func _fall_zone_instance(parent: Node, at: Vector2, width: float, depth: float) -> FallZone:
+	var zone := load("res://scenes/objects/fall_zone/fall_zone.tscn") \
+		.instantiate() as FallZone
+	zone.position = at
+	zone.width = width
+	zone.depth = depth
+	parent.add_child(zone)
+	return zone
+
+
 ## 触发源 fixture：放在人踩不到的高度，本组只手动 `_set_pressed` 驱动，不碰物理重叠。
 func _plate_instance(rig: Node, node_name: String, at: Vector2) -> ButtonPlate:
 	var plate := load("res://scenes/objects/button_plate/button_plate.tscn") \
@@ -1032,11 +1178,16 @@ func _solid_box(at: Vector2, size: Vector2) -> StaticBody2D:
 	return body
 
 
-## 三个存档点 + 一个玩家，摆在第 5 节那块地面（x 600~1800）上：不放祭坛、不放危险物、
-## 不放终点区，第 14 组钉的两条都不该被别的编排掺和。节点名带 x，回灌那条断言才读得出来。
-func _build_checkpoint_ring(parent: Node) -> Dictionary:
+## 三个存档点 + 一个玩家，摆在第 5 节那块地面（x 600~1800）上：不放祭坛、不放终点区，
+## 第 14 组钉的两条都不该被别的编排掺和。节点名带 x，回灌那条断言才读得出来。
+## net_at ≥ 0 时另铺一张坠落带（顶边线落在 y=net_at）；at 决定关卡根摆在哪 —— 第 15 组要用它
+## 把整环挪到没有地面的半空。两件都必须在关卡进树**之前**做好：LevelBase._bind_hazards() 是在
+## 自己的 _ready() 里按契约信号扫全子树的，事后 add_child 的构件它看不见；而事后搬关卡根，
+## 物理服务器会在同一拍里把 Area2D 搬走、玩家的刚体变换还留在旧位置，那一拍读到的重叠是假的。
+func _build_checkpoint_ring(parent: Node, net_at: float = -1.0, at: Vector2 = Vector2.ZERO) -> Dictionary:
 	var level := load("res://scenes/levels/level_base.gd").new() as LevelBase
 	level.start_with_ability = true
+	level.position = at
 	var terminals: Array = []
 	for x in [700.0, 800.0, 900.0]:
 		var terminal := load("res://scenes/objects/checkpoint/checkpoint.tscn") \
@@ -1045,6 +1196,13 @@ func _build_checkpoint_ring(parent: Node) -> Dictionary:
 		terminal.position = Vector2(x, 0.0)
 		level.add_child(terminal)
 		terminals.append(terminal)
+	if net_at >= 0.0:
+		var net := load("res://scenes/objects/fall_zone/fall_zone.tscn") \
+			.instantiate() as FallZone
+		net.name = "FallZone"
+		net.position = Vector2(800.0, net_at)
+		net.width = 1600.0
+		level.add_child(net)
 	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
 	hero.position = Vector2(650.0, -Player.COLLISION_HALF_HEIGHT)
 	level.add_child(hero)
@@ -1086,8 +1244,9 @@ func _build_mini_level(parent: Node) -> Dictionary:
 	return {"level": level, "altar": altar, "spikes": spikes, "checkpoint": checkpoint, "walker": walker}
 
 
-## Main 的替身：常驻根（world_root 组）+ get_run_state + reload_level 计数。
-## 第 9、10 组都要一个关卡实例挂在「已经有 Main 在跑」的世界里。
+## Main 的替身：常驻根（world_root 组）+ get_run_state + 两条重载入口各自计数。
+## 第 9、10 组都要一个关卡实例挂在「已经有 Main 在跑」的世界里；第 15 组要分清关卡
+## 委托的是哪一条 —— reload_level 保留进度、restart_level 清空进度，只数一个就分不出来。
 func _make_world_root():
 	var stub = Node.new()
 	var stub_script := GDScript.new()
@@ -1095,10 +1254,13 @@ func _make_world_root():
 extends Node
 var run_state := {}
 var reload_calls := 0
+var restart_calls := 0
 func get_run_state() -> Dictionary:
 	return run_state
 func reload_level() -> void:
 	reload_calls += 1
+func restart_level() -> void:
+	restart_calls += 1
 """
 	stub_script.reload()
 	stub.set_script(stub_script)
