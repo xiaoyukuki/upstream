@@ -10,6 +10,10 @@ extends Node2D
 ##    回灌重生位与祭坛已耗。与祭坛/终点同一口径：构件摆进场景树就生效，零接线。
 ##    D42 起死亡不当帧换场景：先叫 `player.die(death_time)` 演一拍，等它发回 `death_finished`
 ##    才去委托重载 —— 时长只住在本类这一个导出项上，Player 与液滴都不另存一份。
+##    D51 补上这条链上两处「有读、没人写」的洞：祭坛已耗由踩上它的那一刻真的记进
+##    run_state（此前游戏代码里没有任何地方写这个键，回灌是死路，只有守门脚本手写）；
+##    存档点改为**全关卡只一台激活** —— 新台顶掉旧台（旧台回 idle 皮），它的身份（相对
+##    本关卡根的 NodePath）与重生位一起进 run_state，于是重载后亮着的还是那一台。
 ##
 ## 第 3 条原来每关抄一遍：`level_01_tutorial.gd` 与 `level_template.gd` 各一份，实现还不一致
 ## （引导关写死 const、模板用导出项）。现在下沉到基类，新关只要按模板约定摆好
@@ -56,6 +60,8 @@ var _goal_wait: float = 0.0
 var _dying: bool = false
 ## 演出已结束、重载还没落地的那一帧。
 var _death_pending: bool = false
+## 当前激活的那一台存档点（D51）：亮灭只有这一处说了算，存档点之间不互认。
+var _active_checkpoint: Node
 
 
 func _ready() -> void:
@@ -114,6 +120,10 @@ func _apply_run_state() -> void:
 	var state: Dictionary = root.call(&"get_run_state")
 	if state.has("respawn_position"):
 		_set_player_start(state["respawn_position"])
+	# 身份跟着位置一起回灌（D51）：重载后亮的还是死前那一台，不是全灭、也不是全亮。
+	# 路径解析不到（摆图时改了名或挪了层级）就当没这回事 —— 重生位本身仍然有效。
+	if state.has("respawn_marker"):
+		_set_active_checkpoint(get_node_or_null(state["respawn_marker"]))
 	if state.get("altar_spent", false):
 		TimeManager.set_ability_enabled(true)
 		var altar: Node = _resolve(altar_path, &"ability_granted", "altar_path")
@@ -150,7 +160,25 @@ func _bind_altar() -> void:
 	var altar: Node = _resolve(altar_path, &"ability_granted", "altar_path")
 	if altar == null:
 		return
-	altar.connect(&"ability_granted", _begin_ability_sequence)
+	altar.connect(&"ability_granted", _on_altar_granted)
+
+
+## 接在信号上的不是演出本身，而是「先记账、再开演」。拆两步是因为
+## `_begin_ability_sequence` 是给子类覆写的钩子（引导关就在覆写）——
+## 覆写时漏一句 super 就会把进度也一起漏掉，而记账不该依赖别人的自觉。
+func _on_altar_granted() -> void:
+	_mark_altar_spent()
+	_begin_ability_sequence()
+
+
+## 「祭坛已耗」与「能力已开」是两拍（D16 还要等松手），但记进 run_state 的只能是前者：
+## 踩上祭坛那一刻石头就烧了，重载回来不该复生。能力开关由它推导，不另存一份（D31 订正）。
+func _mark_altar_spent() -> void:
+	var root := _world_root()
+	if root == null:
+		return
+	var state: Dictionary = root.call(&"get_run_state")
+	state["altar_spent"] = true
 
 
 func _bind_goal() -> void:
@@ -168,9 +196,14 @@ func _bind_hazards() -> void:
 		node.connect(&"touched_player", _on_hazard_touched)
 
 
+## 存档点还要 claim()/release()（D51）：只发信号、不认这两个方法的构件亮不起来也灭不下去，
+## 会退化成「踩过几台亮几台、重载后集体复位」。这条在接线当刻就能判，所以当场响一次。
 func _bind_checkpoints() -> void:
 	for node: Node in _find_contract_nodes(&"checkpoint_reached"):
-		node.connect(&"checkpoint_reached", _on_checkpoint_reached)
+		if not node.has_method(&"claim") or not node.has_method(&"release"):
+			push_warning("存档点 %s 发 checkpoint_reached 却没有 claim/release，本关会出现多台同亮"
+				% node.name)
+		node.connect(&"checkpoint_reached", _on_checkpoint_reached.bind(node))
 
 
 func _find_contract_nodes(signal_name: StringName) -> Array[Node]:
@@ -258,12 +291,40 @@ func _on_death_finished() -> void:
 
 ## 存的是「玩家该在哪里重生」而不是存档点原点 —— Checkpoint 发来的已经是抬过
 ## 半个盒高的玩家位。写进常驻根的 run_state：关卡马上要整个换掉，进度不能住在里面。
-func _on_checkpoint_reached(position: Vector2) -> void:
+## 亮灭排在记账之前：无常驻根（F6 直跑关卡场景）时进度确实没地方存，但「全关卡只一台
+## 亮」这条视觉规则不该跟着失效 —— 它是玩家判断存没存的唯一依据。
+func _on_checkpoint_reached(position: Vector2, source: Node) -> void:
+	_set_active_checkpoint(source)
 	var root := _world_root()
 	if root == null:
 		return
 	var state: Dictionary = root.call(&"get_run_state")
 	state["respawn_position"] = position
+	state["respawn_marker"] = _relative_path(source)
+
+
+## 唯一激活（D51）：新台点亮、上一台回 idle。同一台再踩直接返回 —— 重生时人正站在
+## 自己那条带上，body_entered 会再点一次名，不该因此把同一台顶掉又装回来。
+func _set_active_checkpoint(node: Node) -> void:
+	if node == null or node == _active_checkpoint:
+		return
+	if is_instance_valid(_active_checkpoint) and _active_checkpoint.has_method(&"release"):
+		_active_checkpoint.call(&"release")
+	_active_checkpoint = node
+	if node.has_method(&"claim"):
+		node.call(&"claim")
+
+
+## 身份存的是「相对本关卡根的 NodePath」而不是节点引用：关卡每死一次就整个换掉，
+## 引用跟着旧实例一起没，路径却能在新的那份里指回同一台。相对而非绝对，是为了
+## Main 那边把关卡挂在哪个容器下、叫什么名字都不影响这条链（父链走到本关卡根倒拼）。
+func _relative_path(node: Node) -> NodePath:
+	var names: Array = []
+	var cursor: Node = node
+	while cursor != null and cursor != self:
+		names.push_front(cursor.name)
+		cursor = cursor.get_parent()
+	return NodePath("/".join(names))
 
 
 ## 常驻 World 根（main.tscn 的 Main，D31 的进度袋挂在它身上）。F6 直接跑关卡场景时

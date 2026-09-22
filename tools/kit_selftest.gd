@@ -210,6 +210,7 @@ func _ready() -> void:
 	await _test_freeze_filter()
 	await _test_afterimage()
 	await _test_piston()
+	await _test_sticky_progress()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -434,6 +435,8 @@ func _test_run_state() -> void:
 	await _frame(2)
 
 	# 模拟 Main.reload_level 落一个新关卡实例：回灌重生位与祭坛已耗。
+	# 这里手写这个键是因为本组测的是**读路径**；写路径由第 14 组钉 —— 以前两边都没人钉，
+	# 于是游戏代码里压根没人写的这条链被本组的手写值盖了很久。
 	stub.run_state["altar_spent"] = true
 	var rig2 := _build_mini_level(stub)
 	var walker2: Player = rig2["walker"]
@@ -461,7 +464,9 @@ func _test_grant_beat() -> void:
 	# 先等第 9 组的旧人真的离树：那些 rig 与本组共用 x=3000 那条线，还挂在树上的旧玩家
 	# 会替新人把这一祭坛的一次性授予吃掉（body_entered 只认第一个撞进来的身体）。
 	await _frame(2)
-	_make_world_root()
+	# 本组的替身根用完要拆：它挂在 world_root 组里，留着就会占住「第一个」的位置，
+	# 让后面任何一组把自己的 run_state 写到别人身上。
+	var world_root = _make_world_root()
 	var rig := _build_mini_level(self)
 	var walker: Player = rig["walker"]
 	var altar := rig["altar"] as AbilityAltar
@@ -500,6 +505,9 @@ func _test_grant_beat() -> void:
 	await _frame(2)
 
 	# 半路死了：核心不该飞进一具正在缩没的身体，当场收摊。
+	# 上一段那次踩祭坛已经把「已耗」记进替身根了（D51 起这是游戏代码的生产行为，不是 fixture 手写），
+	# 而本组这一段要验的是"第一次踩"，所以进度得擦干净 —— 生产里这一下由 Main.load_level 换关时做。
+	world_root.run_state.clear()
 	TimeManager.reset_state()
 	var rig2 := _build_mini_level(self)
 	var walker2: Player = rig2["walker"]
@@ -516,6 +524,7 @@ func _test_grant_beat() -> void:
 	await _frame(2)
 	_check("演出半路人死了当场收摊", altar2.grant_progress() < 0.0)
 	(rig2["level"] as Node).queue_free()
+	world_root.queue_free()
 	TimeManager.reset_state()
 	await _frame(2)
 
@@ -917,6 +926,67 @@ func _test_piston() -> void:
 	hero.queue_free()
 	rig3.queue_free()
 	TimeManager.reset_state()
+	# 等这一组的人真的离树：第 14 组要用 get_first_node_in_group 挑玩家，留着他把回灌做在错的人身上。
+	await _frame(2)
+
+
+## 第 14 组：D51 两条粘性进度。钉的都是「代码看着没错、只有实机才露馅」那两件事：
+## ① 祭坛「已耗」得由**游戏代码**写进 run_state —— 第 9 组为测回灌一直手写这个键，
+##    于是读路径绿着、写路径整条死过；② 存档点全关卡只一台激活，且死亡重载后亮的
+##    还是死前那一台（旧的「每台自存自亮」写法是踩过几台亮几台 + 重载集体复位）。
+func _test_sticky_progress() -> void:
+	await _frame(2)
+	# —— ① 写路径：踩上祭坛那一刻就记「已耗」，这一条不接受守门替游戏代码写。 ——
+	var stub = _make_world_root()
+	var rig := _build_mini_level(stub)
+	var walker: Player = rig["walker"]
+	await _frame(2)
+	_check("踩祭坛之前 run_state 里没有 altar_spent（写的人只有游戏代码）",
+		not stub.run_state.has("altar_spent"))
+	walker.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("踩上祭坛即由游戏代码把「已耗」写进常驻根",
+		stub.run_state.get("altar_spent", false))
+	# 已耗 ≠ 能力已开：D16 那一拍还要等松手，所以这里只钉键、不钉 TimeManager。
+	(rig["level"] as Node).queue_free()
+	stub.queue_free()
+	await _frame(3)
+
+	# —— ② 唯一激活：三台存档点挨个踩过去，任何时刻只有一台亮。 ——
+	var root = _make_world_root()
+	var ring := _build_checkpoint_ring(root)
+	var terminals: Array = ring["terminals"]
+	var hero: Player = ring["hero"]
+	await _frame(3)
+	_check("开局没有任何存档点亮着", _active_count(terminals) == 0)
+	hero.global_position = Vector2(700.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("踩 A：A 亮，且身份跟着重生位一起进了 run_state",
+		terminals[0].is_active and root.run_state.has("respawn_marker"))
+	hero.global_position = Vector2(800.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("踩 B：只 B 亮（A 是让位，不是坏了）",
+		terminals[1].is_active and _active_count(terminals) == 1)
+	hero.global_position = Vector2(700.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("往回踩 A：激活搬回 A（皮永远说实话）",
+		terminals[0].is_active and _active_count(terminals) == 1)
+
+	# —— 回灌：换一个新关卡实例、run_state 留着，这才是 Main.reload_level 的语义。 ——
+	var marker = root.run_state.get("respawn_marker")
+	_check("身份是「相对关卡根的路径」而不是绝对路径（Main 挪容器也不影响）",
+		marker is NodePath and str(marker) == "A700")
+	(ring["level"] as Node).queue_free()
+	await _frame(3)
+	var ring2 := _build_checkpoint_ring(root)
+	var t2: Array = ring2["terminals"]
+	var hero2: Player = ring2["hero"]
+	await _frame(3)
+	_check("重载后亮的还是死前那一台（不是全灭、也不是全亮）",
+		t2[0].is_active and _active_count(t2) == 1)
+	_check("重生位仍指回那一台",
+		hero2.spawn_point == Vector2(700.0, -Player.COLLISION_HALF_HEIGHT))
+	root.queue_free()
 	await _frame(2)
 
 
@@ -960,6 +1030,35 @@ func _solid_box(at: Vector2, size: Vector2) -> StaticBody2D:
 	body.position = at
 	add_child(body)
 	return body
+
+
+## 三个存档点 + 一个玩家，摆在第 5 节那块地面（x 600~1800）上：不放祭坛、不放危险物、
+## 不放终点区，第 14 组钉的两条都不该被别的编排掺和。节点名带 x，回灌那条断言才读得出来。
+func _build_checkpoint_ring(parent: Node) -> Dictionary:
+	var level := load("res://scenes/levels/level_base.gd").new() as LevelBase
+	level.start_with_ability = true
+	var terminals: Array = []
+	for x in [700.0, 800.0, 900.0]:
+		var terminal := load("res://scenes/objects/checkpoint/checkpoint.tscn") \
+			.instantiate() as Checkpoint
+		terminal.name = "A%d" % int(x)
+		terminal.position = Vector2(x, 0.0)
+		level.add_child(terminal)
+		terminals.append(terminal)
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	hero.position = Vector2(650.0, -Player.COLLISION_HALF_HEIGHT)
+	level.add_child(hero)
+	parent.add_child(level)
+	return {"level": level, "terminals": terminals, "hero": hero}
+
+
+## 几台存档点当前是激活的 —— 第 14 组拿它钉「全关卡只一台亮」这条不变量。
+func _active_count(terminals: Array) -> int:
+	var active := 0
+	for terminal in terminals:
+		if (terminal as Checkpoint).is_active:
+			active += 1
+	return active
 
 
 ## 搭一个最小关卡：祭坛 + 尖刺 + 存档点 + 玩家，挂到传入父节点下。

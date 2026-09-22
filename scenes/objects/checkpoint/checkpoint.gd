@@ -9,6 +9,11 @@ extends Area2D
 ## 信号带的位置而非本体：LevelBase 接住写进 Main.run_state —— 跨重载的粘性状态
 ## 只住 Main（关卡场景每死一次就整个换掉，D31 第 1/2 条）。
 ##
+## D51：哪一台是「当前存档点」不再由本构件自己记，改由 LevelBase 回 claim()/release()。
+## 各台自存自亮的后果是同一条命踩过几台就几台常亮，而重载后新实例的标记全 false ——
+## 重生位是对的、皮在撒谎。本构件仍然不认识别的存档点（D49 口径：协调归 LevelBase），
+## 只被动挨点亮与熄灭，唯一的自判是「已经亮着的那台再踩不重复发信号」。
+##
 ## 节点原点 = 底边中心（贴地），带心 -Player.COLLISION_HALF_HEIGHT 沿用地面传感契约：
 ## 蹲着也能存（D29 与 D27 交叉核对：蹲伏盒占 0-15，带子跨那条线）。
 ## 摆图硬数（D38 知情后果，进手册 §8）：离任何危险物留一个盒宽加视觉余量 ——
@@ -18,8 +23,9 @@ extends Area2D
 
 signal checkpoint_reached(position: Vector2)
 
-## 本条命内已存过：一次性，再踩同一个点无事可做。换点由另一个 Checkpoint 发它自己的信号。
-var is_saved: bool = false
+## 此刻是不是「当前存档点」：只有这一台亮 saved 皮，也只有它才是重生位。
+## 由 LevelBase 经 claim()/release() 维护（D51），本构件自己只在已亮着时不重复发信号。
+var is_active: bool = false
 
 const TEX_IDLE: Texture2D = preload("res://assets/props/terminal_idle.png")
 const TEX_SAVED: Texture2D = preload("res://assets/props/terminal_saved.png")
@@ -39,12 +45,27 @@ func _ready() -> void:
 func _on_body_entered(body: Node2D) -> void:
 	if not body.is_in_group(&"player"):
 		return
-	if is_saved:
+	if is_active:
 		return
-	is_saved = true
-	queue_redraw()
+	# 点亮由 LevelBase 回过来的 claim() 做（D51）：谁亮谁灭是关卡编排，不归构件。
 	# 存的是「玩家该在哪里重生」：玩家原点在碰撞盒中心，地面点要抬半个盒高才是它。
 	checkpoint_reached.emit(global_position + Vector2(0.0, -Player.COLLISION_HALF_HEIGHT))
+
+
+## 点亮：成为当前存档点。只换皮、不发信号 —— 发信号的是踩上来的那一拍。
+func claim() -> void:
+	if is_active:
+		return
+	is_active = true
+	queue_redraw()
+
+
+## 熄灭：让位给更新的存档点。回 idle 皮不是坏了，是它在说实话（D51）。
+func release() -> void:
+	if not is_active:
+		return
+	is_active = false
+	queue_redraw()
 
 
 ## 只在值真的变了时才写，避免 @tool 每次装载场景都把编辑器标成「未保存修改」。
@@ -63,7 +84,7 @@ func _rebuild() -> void:
 
 
 func _draw() -> void:
-	var tex := TEX_SAVED if is_saved else TEX_IDLE
+	var tex := TEX_SAVED if is_active else TEX_IDLE
 	# 两张零件**尺寸刻意不同**（idle 32×12 / saved 44×16）：D45 的读法全靠"已存"多出来的
 	# 那 15 px 顶灯与两侧 6 px 青边，统一成一张的尺寸就等于把这条反馈裁掉。
 	# 底边中心对齐 = 与节点原点同一套约定，于是换装时脚不会跳。
