@@ -737,20 +737,34 @@ def m5_final():
 
 # ---------------------------------------------------------------- D36 刷卡门
 
-def paint_gate(img, p, ab, parts, cx, floor_y, progress, latched, w=32, h=96):
+## D53 拒绝态那一对 = 选型图 `tools/gen_gate_alert_preview.py` 的 G 行字面值，**不从调色板推导**：
+## 那颗灯在 1280×720 里只有 4×4 设备像素，还要透过 D46 那层 CRT，任何纯色相对琥珀都拉不开
+## （实测对底座 2.3~4.4、对琥珀 2.1~4.0，全在 D26 的 4.5 下限之下）。用户看图挑了 G ——
+## 赌的是面积：底座一起换成暗红，亮的部分从 2×2 涨到整颗 4×4。
+## 三处同源：本文件、`key_door.gd` 的 LED_DENIED / LED_DENIED_SOCKET、props.json 的
+## gate_led_denied / gate_led_denied_socket，verify_kit 比对后两处。
+GATE_LED_DENIED = (255, 86, 74)
+GATE_LED_DENIED_SOCKET = (66, 14, 18)
+
+
+def paint_gate(img, p, ab, parts, cx, floor_y, progress, latched, w=32, h=96, denied=False):
     """刷卡门（D36）：同一副钢框里是一道**能量闸**，不是钢板。
 
     通带取下部 h*(1-progress)，与卷帘取上部方向相反 —— 卷帘的缝在下面等着挤人，
     光幕的缝在上面只会越让越开。顶端那三行残辉是断电的尾巴，碰撞只到亮带为止，
-    预览与构件走同一条算式。LED 锁着 = 琥珀（与钥匙同色，成对），闩开 = 青。
+    预览与构件走同一条算式。LED 锁着 = 琥珀（与钥匙同色，成对），闩开 = 青，
+    无卡靠近 = 红且**连底座一起**红（D53）。
     幕体**纯色半透明、不画纹路** —— 带光丝的那版用户看过直接否了：纹路丑，单纯一块蓝光幕就够。
     半透明是必要的，背后的墙透得出来才读成「光」，平涂不透明就成了一块门板。
 
-    两处和构件逐像素对齐的写法，改这里要一起改构件：
+    三处和构件逐像素对齐的写法，改这里要一起改构件：
     - 锁着的 LED 取 **p（实装风格 g）的 amber**，不是门框那套 ab 的 —— 「与钥匙同色」判的是
       `key_card.png` 落盘的那个色，用 ab 的琥珀差着一档亮度，成对这条就读不出来。
     - 门楣下面那道亮脊**复用 header 零件自己的前两行**，不是平涂一块 metal：构件里这样写
       就少一个要进 props.json 比对的色，预览与构件因此仍然是同一张纹理的同一截。
+    - 拒绝态那一对（`GATE_LED_DENIED` / `GATE_LED_DENIED_SOCKET`）是**字面常量**，不从调色板
+      推导：构件里是同名 `Color8`、清单里是 `gate_led_denied` / `gate_led_denied_socket`，
+      三处任改其一 verify_kit 就在这里响（D53）。
     """
     x0 = cx - w // 2
     top = floor_y - h
@@ -760,9 +774,11 @@ def paint_gate(img, p, ab, parts, cx, floor_y, progress, latched, w=32, h=96):
     tile_h_plain(img, parts["header"].crop((0, 0, 16, 2)), x0, top, w)
     d = ImageDraw.Draw(img, "RGBA")
     led = (x0 + w // 2 - 1, top - 7)
-    d.rectangle([led[0] - 1, led[1] - 1, led[0] + 2, led[1] + 2], fill=G.darker(ab["screen"], 0.2))
+    d.rectangle([led[0] - 1, led[1] - 1, led[0] + 2, led[1] + 2],
+                fill=GATE_LED_DENIED_SOCKET if denied else G.darker(ab["screen"], 0.2))
     d.rectangle([led[0], led[1], led[0] + 1, led[1] + 1],
-                fill=G.mix(p["accent"], (255, 255, 255), 0.5) if latched else p["accent2"])
+                fill=GATE_LED_DENIED if denied
+                     else (G.mix(p["accent"], (255, 255, 255), 0.5) if latched else p["accent2"]))
     live = int(round(h * (1.0 - progress)))
     if live <= 0:
         return
@@ -800,13 +816,16 @@ def gate_anim_row(p, terrain, decor, root):
 
 
 def gate_lock_row(p, terrain, decor, root):
-    """可读性行：锁着的光闸 + 头顶带着钥匙的主角。琥珀对琥珀能不能读成「这把开那扇」，看图就知道。"""
+    """可读性行：锁着的光闸 + 头顶带着钥匙的主角。琥珀对琥珀能不能读成「这把开那扇」，看图就知道。
+    右边多画一扇 D53 的拒绝态（无卡靠近，连底座发红）—— 同一行现在同时回答两件事：
+    琥珀对琥珀读不读得成「一把开一扇」，红对琥珀读不读得出「这颗灯换了状态」。"""
     W, H, FY = 496, 188, 172
     ab = G.STYLES["ab"]
     parts_ab = make_parts(ab, ab["deep"], ab["accent2"])
     img = context_strip(p, terrain, decor, W, H, FY)
     ceil_band(img, terrain, W, 0)
     paint_gate(img, p, ab, parts_ab, 300, FY, 0.0, False)
+    paint_gate(img, p, ab, parts_ab, 420, FY, 0.0, False, denied=True)
     paint_door(img, ab, parts_ab, 120, FY, 0.0, False)
     card = part_key_card(p)
     G.paste_slime(img, "run", 2, 216, FY, False, 1, root, G.STYLES["g2"]["player_rim"])
@@ -815,6 +834,7 @@ def gate_lock_row(p, terrain, decor, root):
     d = ImageDraw.Draw(img)
     d.text((86, 20), "button door (shutter)", fill=(214, 224, 240), font=_font(11))
     d.text((258, 20), "key door, locked", fill=(214, 224, 240), font=_font(11))
+    d.text((386, 20), "key door, denied", fill=(214, 224, 240), font=_font(11))
     d.text((196, FY - 48), "held key", fill=(214, 224, 240), font=_font(11))
     return img
 
@@ -834,8 +854,9 @@ def m5_door():
          "on a head).  Gate is a field from the floor, dying TOP DOWN (gap opens ABOVE, it can "
          "never squeeze anyone)."),
         (gate_lock_row(p, terrain, decor, root),
-         "legibility: locked reader LED = same amber as the key.  Nothing moves in this door's "
-         "frame, the frame is the only solid part."),
+         "legibility: locked reader LED = same amber as the key.  Denied LED (no key, player in "
+         "the sensor band) = the whole lamp goes red, socket included.  Nothing moves in this "
+         "door's frame, the frame is the only solid part."),
     ]
 
     pad, gap, line = 16, 22, 15
@@ -941,6 +962,10 @@ def emit_parts():
         "m5_style": G.SHIPPED,
         "gate_led_locked": list(g["accent2"]),
         "gate_led_lit": list(G.mix(g["accent"], (255, 255, 255), 0.5)),
+        # D53：拒绝态那一对是字面值、不从调色板推导（缘由见 paint_gate 上方那段）。
+        # 构件里是同名 Color8 常量，verify_kit 逐条比对。
+        "gate_led_denied": list(GATE_LED_DENIED),
+        "gate_led_denied_socket": list(GATE_LED_DENIED_SOCKET),
         "gate_curtain": list(g["accent"]),
         # D44：祭坛环与核心的青色。构件里那份 CORE_COLOR 常量必须等于这个 ——
         # 旧版祭坛把一串琥珀写死在自己脚本里、从来不在清单上，本条把这条路堵上。

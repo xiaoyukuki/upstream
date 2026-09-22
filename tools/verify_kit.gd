@@ -709,11 +709,14 @@ func _verify_props() -> void:
 	_check_color("ButtonPlate.END_SHADE", bc["END_SHADE"], m["end_shade"])
 	_check_color("ButtonPlate.SOCKET", bc["SOCKET"], m["button_socket"])
 	_check_color("ButtonPlate.LED_LIT", bc["LED_LIT"], m["led_lit"])
-	# M5（D36 第 6/7 条）：光幕三色与门楣底座各自同源 —— LED 锁色 = 钥匙卡同色是语义不是巧合。
+	# M5（D36 第 6/7 条）：光幕那几色与门楣底座各自同源 —— LED 锁色 = 钥匙卡同色是语义不是巧合。
+	# D53 起拒绝态那一对也进这张表：它是全项目唯一不从调色板推导的构件色，更容易单独漂走。
 	var kc: Dictionary = (load(KEYDOOR_SCRIPT) as GDScript).get_script_constant_map()
 	_check_color("KeyDoor.LED_SOCKET", kc["LED_SOCKET"], m["led_socket"])
 	_check_color("KeyDoor.LED_LOCKED", kc["LED_LOCKED"], m["gate_led_locked"])
 	_check_color("KeyDoor.LED_LIT", kc["LED_LIT"], m["gate_led_lit"])
+	_check_color("KeyDoor.LED_DENIED", kc["LED_DENIED"], m["gate_led_denied"])
+	_check_color("KeyDoor.LED_DENIED_SOCKET", kc["LED_DENIED_SOCKET"], m["gate_led_denied_socket"])
 	_check_color("KeyDoor.CURTAIN", kc["CURTAIN"], m["gate_curtain"])
 	# D44：祭坛那串青色从此有清单可对。旧版它写死在构件里、从来不在 props.json 上，
 	# 于是风格换了它不换 —— 这条比对就是为了让"游离的构件色"没法再复发。

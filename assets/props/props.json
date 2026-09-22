@@ -33,6 +33,16 @@
     242,
     248
   ],
+  "gate_led_denied": [
+    255,
+    86,
+    74
+  ],
+  "gate_led_denied_socket": [
+    66,
+    14,
+    18
+  ],
   "gate_curtain": [
     110,
     230,

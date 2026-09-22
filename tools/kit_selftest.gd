@@ -32,6 +32,10 @@ extends Node
 ## 15) 坠落带（D52）：掉出世界这条路从无兜底改成有一根线 —— 带子只认玩家且一条命只发一次；
 ##     走的是**保留进度**的死亡重载而不是清空进度的主动重开，于是掉下去回的是最近那台存档点；
 ##     判据不吃世界 delta，冻着往下落照样被接住。
+## 16) 刷卡门的拒绝提示（D53）：无卡走进感应带只闪**一次**（边沿触发，站着不动不叠发）；
+##     它是只读旁路 —— 不锁移动、不消耗卡、幕一格不塌；有卡则直接进闩锁链，红色不许插队；
+##     脉冲全程在世界冻结里跑得完（接成世界 delta 就永远红着）；尸体不触发；时长只有
+##     `denied_time` 一个来源；闩了之后不再闪。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -221,6 +225,7 @@ func _ready() -> void:
 	await _test_piston()
 	await _test_sticky_progress()
 	await _test_fall_zone()
+	await _test_gate_denial()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1122,6 +1127,130 @@ func _test_fall_zone() -> void:
 	root.queue_free()
 	TimeManager.reset_state()
 	await _frame(2)
+
+
+## 第 16 组：刷卡门的拒绝提示（D53）。钉的全是"旁路写歪了画面不会响、要到试玩才露馅"那几件：
+## 只闪一次而不是持续眨、它一个字都不碰闩锁链、脉冲在冻结里走得完、尸体不算玩家这条缝也接上了、
+## 时长只有一个来源、门开完了不再报"你别过来"。像素不在这里验（D46 同规矩），
+## 颜色那一对归 verify_kit 与 props.json 比对。
+func _test_gate_denial() -> void:
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	var rig := Node2D.new()
+	rig.name = "DenialRig"
+	add_child(rig)
+	# fixture 摆在 x 9000 之外并自带地面：前面几组的地面最远到 6500，人在 9000 是坠着走的。
+	var ground := _solid_box(Vector2(9600.0, 40.0), Vector2(1600.0, 80.0))
+	var card := load("res://scenes/objects/key_pickup/key_pickup.tscn") \
+		.instantiate() as KeyPickup
+	card.name = "DenialCard"
+	card.position = Vector2(9300.0, 0.0) # 离门远：先让他够不着，第 ⑦ 档才去捡
+	var gate := load("res://scenes/objects/key_door/key_door.tscn") \
+		.instantiate() as KeyDoor
+	gate.name = "DenialGate"
+	gate.position = Vector2(9600.0, 0.0)
+	gate.key = NodePath("../DenialCard")
+	rig.add_child(card)
+	rig.add_child(gate)
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	var out_x := 9500.0  # 感应带 9560..9640，人在这里够不着门
+	var in_x := 9565.0   # 带内、幕面（9584）之外：不穿墙，只站进感应带
+	hero.position = Vector2(out_x, -Player.COLLISION_HALF_HEIGHT)
+	add_child(hero)
+	await _frame(3)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("开场：世界冻着、人在带外，灯不闪",
+		TimeManager.is_time_frozen() and not gate.is_denial_showing())
+	_check("人在带外待多久都不会闪", await _count_denial_edges(gate, 20) == 0)
+
+	# —— ① 无卡进带：红起来，且它是**只读**的 ——
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	var settle := 0
+	while not gate.is_denial_showing() and settle < 10:
+		settle += 1
+		await get_tree().physics_frame
+	_check("无卡走进感应带即闪红（等的是重叠登记那几帧，不是脉冲本身）",
+		gate.is_denial_showing())
+	_check("拒绝是只读旁路：不锁移动、不消耗卡、幕一格不塌、门没闩",
+		not hero.movement_locked and not card.held and not card.consumed
+		and gate.curtain_rect().size.y == 96.0 and not gate.is_latched)
+
+	# —— ② 脉冲在冻结里自己走完（接成世界 delta 的那一档会永远红着）——
+	await _frame(45)
+	_check("世界全程冻着，脉冲仍然自己收回去了",
+		TimeManager.is_time_frozen() and not gate.is_denial_showing())
+	# —— ③ 人还站在带里也不叠发：边沿触发，不是持续眨 ——
+	_check("站着不动不会二次触发（边沿触发，离开才重新上弦）",
+		await _count_denial_edges(gate, 60) == 0)
+	# —— ④ 出去再进来：重新上弦，照样闪一次 ——
+	hero.position = Vector2(out_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	_check("离开感应带再进来重新触发一次", await _count_denial_edges(gate, 40) == 1)
+
+	# —— ⑤ 时长只有一个来源：把 denied_time 拉长，脉冲就跟着拉长 ——
+	gate.denied_time = 2.0
+	var step := 1.0 / float(Engine.get_physics_ticks_per_second())
+	hero.position = Vector2(out_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(int(ceil(1.0 / step)))
+	_check("denied_time 改成 2 s 后，1 s 时还在闪（写死 0.5 就在这里响）",
+		gate.is_denial_showing())
+	await _frame(int(ceil(1.5 / step)))
+	_check("过了 2 s 才收回去", not gate.is_denial_showing())
+	gate.denied_time = 0.5
+
+	# —— ⑥ 尸体不触发红：感应带里第四个「尸体不算玩家」的缝 ——
+	hero.is_dead = true
+	hero.position = Vector2(out_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	_check("死在带里那一拍不闪红（与不刷卡同一条判据）",
+		await _count_denial_edges(gate, 20) == 0)
+	hero.is_dead = false
+
+	# —— ⑦ 有卡进带：直接进闩锁链，红色不许插队 ——
+	hero.position = Vector2(9300.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("先捡卡（后面几档都要它被持有）", card.held)
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_check("带卡进带不闪红，直接认卡", not gate.is_denial_showing() and card.consumed)
+	_check("红色插不进闩锁链：移动被锁、演出已经开始", hero.movement_locked)
+	var guard := 0
+	while not gate.is_latched and guard < 120:
+		guard += 1
+		await get_tree().physics_frame
+	_check("演出照旧跑完（D41 那条链一字未动）", gate.is_latched)
+
+	# —— ⑧ 门开完了不再报"你别过来"：卡已消耗，没有 is_latched 早退就会常亮红 ——
+	hero.position = Vector2(out_x, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	hero.position = Vector2(in_x, -Player.COLLISION_HALF_HEIGHT)
+	_check("闩了之后再走进感应带不再闪红", await _count_denial_edges(gate, 30) == 0)
+
+	TimeManager.notify_movement_intent(false)
+	hero.queue_free()
+	rig.queue_free()
+	ground.queue_free()
+	await _frame(3)
+
+
+## 数「不在闪 → 在闪」这个上升沿出现了几次，跑满 frames 个物理帧。
+## 只数上升沿才分得出"闪一次"与"一直红着"/"每帧重发"—— 后两种在 is_denial_showing()
+## 的抽样读数上跟第一种长得一模一样，边沿计数不会。
+func _count_denial_edges(gate: KeyDoor, frames: int) -> int:
+	var edges := 0
+	var was := gate.is_denial_showing()
+	for i in frames:
+		await get_tree().physics_frame
+		var now := gate.is_denial_showing()
+		if now and not was:
+			edges += 1
+		was = now
+	return edges
 
 
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒

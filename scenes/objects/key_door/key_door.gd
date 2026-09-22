@@ -32,6 +32,13 @@ extends StaticBody2D
 ##「这把开那扇」是一对，同色在这里是语义而不是撞车。演出**开始**的那一帧 LED 就转青：
 ## 它是「认卡了、别硬走」的即时回执，等演完才变色等于把回执延后到玩家已经开始按键之后。
 ##
+## 拒绝态（D53）：没有卡却走进感应带时，这颗灯**连底座一起**发红（选型图 G 行：亮面积从
+## 2×2 涨到 4×4，赌的是面积而不是明度 —— 4×4 设备像素上任何纯色相对琥珀都拉不开，实测见
+## `tools/gen_gate_alert_preview.py`）。它是一条**只读旁路**：不锁移动、不消耗卡、不碰闩锁链
+## 的任何一句，认卡之后青仍然盖住红。边沿触发一次、离开感应带才重新上弦，所以站着不动只会
+## 闪一次而不是持续眨。时长与演出同理**不吃世界 delta**（走近 = 按着方向键 = 世界冻着，
+## 吃世界 delta 的脉冲永远走不完），跑在引擎自己的固定物理步长上。
+##
 ## @tool：改 height/width/sensor_* 立刻重画；编辑器里画一条到钥匙的辅助连线（运行时不画）。
 
 ## 门洞高度，也是光幕完全供着电时的高度。
@@ -67,6 +74,11 @@ extends StaticBody2D
 ## 玩家移动被锁住这么久。填 0 会被兜到 0.001，等于退化回 D40 那种一帧硬切。
 @export var swipe_time: float = 0.45
 
+## 拒绝脉冲的时长（秒，同样跑在固定物理步长上、不吃世界 delta）：无钥匙走进感应带时
+## 那颗灯连底座发红这么久，然后自己回到琥珀。填 0 = 下一帧就结束（一帧硬闪）；这条计时
+## 只有累加与比较、没有除法，所以不需要 `swipe_time` 那句 maxf 兜底。
+@export var denied_time: float = 0.5
+
 ## 已完全打开（钥匙已消耗、演出已跑完，光幕与它的碰撞体一起撤掉）。闩了不会倒回去。
 ## 注意与「正在演出」是两件事：演出中卡已经没了、LED 已经青了，但门还没让行。
 var is_latched: bool = false
@@ -76,6 +88,12 @@ var _swipe_elapsed: float = -1.0
 ## 被本扇门临时锁住移动的玩家，演出收尾时把移动还回去。
 var _locked_player: Player
 
+## 拒绝脉冲进行中：-1 表示不在脉冲，否则已经演了多少秒（真实时间，不吃世界 delta）。
+var _denied_elapsed: float = -1.0
+## 本次停留是否还能触发脉冲。人还在带里就不重新上弦，所以站着不动只闪一次而不是持续眨；
+## 离开感应带才回到待命，下一次闯进来照样闪。
+var _denied_armed: bool = true
+
 ## 编辑器连线的终点（门本地坐标），用来发现钥匙被挪了位置。
 var _link_end: Vector2 = Vector2.INF
 
@@ -84,11 +102,16 @@ const TEX_HEADER: Texture2D = preload("res://assets/props/door_header.png")
 const TEX_HEADER_L: Texture2D = preload("res://assets/props/door_header_cap_l.png")
 const TEX_HEADER_R: Texture2D = preload("res://assets/props/door_header_cap_r.png")
 const LINK_COLOR: Color = Color(1.0, 0.62, 0.2, 0.6)
-## 与 props.json 的 gate_led_locked / gate_led_lit / gate_curtain 同源，verify_kit 比对；
+## 与 props.json 的 gate_led_locked / gate_led_lit / gate_curtain / gate_led_denied /
+## gate_led_denied_socket 同源，verify_kit 逐条比对；
 ## LED_SOCKET 与 props.json 的 led_socket 同源（门楣底座与按钮门共用同一个钢框家族）。
+## 拒绝态那一对是选型图 G 行的字面值（`tools/gen_gate_alert_preview.py` 在真帧 + CRT 上量过）：
+## 底座跟着换暗红，亮的面积从 2×2 涨到整颗 4×4，赌面积不说明度。
 const LED_SOCKET: Color = Color8(21, 30, 37)
 const LED_LOCKED: Color = Color8(250, 190, 74)
 const LED_LIT: Color = Color8(182, 242, 248)
+const LED_DENIED: Color = Color8(255, 86, 74)
+const LED_DENIED_SOCKET: Color = Color8(66, 14, 18)
 const CURTAIN: Color = Color8(110, 230, 240)
 ## 光幕底部那行接地钢色 = 实装调色板 g 的 metal（124,136,176），选型图同源。
 const GROUND_ROW: Color = Color8(124, 136, 176)
@@ -130,6 +153,8 @@ func _physics_process(delta: float) -> void:
 		# 这正是「演出在冻结的那一拍里跑」（D41）。
 		_advance_swipe(delta)
 		return
+	_advance_denied(delta)
+	_scan_denied()
 	_scan_reader()
 
 
@@ -143,20 +168,58 @@ func _scan_reader() -> void:
 	var pickup := _key_pickup()
 	if pickup == null or not pickup.is_held():
 		return
-	for body in _reader.get_overlapping_bodies():
-		if not body.is_in_group(&"player"):
-			continue
-		var courier := body as Player
-		# 尸体不刷卡（D42）：死在感应带里那一拍，卡不该飞、幕不该灭 —— 两层演出叠在
-		# 一起只会互相盖住，而这一关马上就要重载，闩上的门也留不到下一世。
-		if courier == null or courier.is_dead:
-			return
-		if pickup.consume(swipe_time):
-			_locked_player = courier
-			courier.movement_locked = true
-			_swipe_elapsed = 0.0
-			queue_redraw()
+	# 尸体不刷卡（D42）：死在感应带里那一拍，卡不该飞、幕不该灭 —— 两层演出叠在
+	# 一起只会互相盖住，而这一关马上就要重载，闩上的门也留不到下一世。
+	var courier := _live_courier()
+	if courier == null:
 		return
+	if pickup.consume(swipe_time):
+		_locked_player = courier
+		courier.movement_locked = true
+		_swipe_elapsed = 0.0
+		# 认卡盖过拒绝。不取消的话演出期间 `_advance_denied` 不再被调用，这个计时会永远
+		# 停在「正在闪」，`is_denial_showing()` 就成了谎 —— 绘制侧本来有优先级兜着，
+		# 但状态本身不该留一个永远不会自己结束的真值。
+		_denied_elapsed = -1.0
+		queue_redraw()
+
+
+## 拒绝脉冲（D53）：**只读旁路** —— 不锁移动、不消耗卡、不碰上面那条闩锁链的任何一句。
+## 与 `_scan_reader` 各跑各的，同一帧里两者互斥（没卡才可能红，有卡才可能闩）。
+## 边沿触发：`_denied_armed` 只在人离开感应带之后重新上弦，所以站着不动只闪一次。
+## 没接钥匙的门（`pickup == null`）照样闪：从玩家的立场「你进不去」是真的，
+## 那条接线错误已经由 `_ready` 的 push_warning 负责响。
+func _scan_denied() -> void:
+	if is_latched or _denied_elapsed >= 0.0:
+		return
+	var pickup := _key_pickup()
+	if pickup != null and pickup.is_held():
+		return
+	if _live_courier() == null:
+		_denied_armed = true
+		return
+	if not _denied_armed:
+		return
+	_denied_armed = false
+	_denied_elapsed = 0.0
+	queue_redraw()
+
+
+## 拒绝脉冲的计时。与演出同一条理由跑固定物理步长：走近 = 按着方向键 = 世界冻着，
+## 吃世界 delta 的脉冲永远走不完。到点自己收回，不需要 `_finish_swipe` 那种收尾顺序 ——
+## 它不锁任何东西，早一帧晚一帧都只是那颗灯的颜色。
+func _advance_denied(delta: float) -> void:
+	if _denied_elapsed < 0.0:
+		return
+	_denied_elapsed += delta
+	if _denied_elapsed >= denied_time:
+		_denied_elapsed = -1.0
+	queue_redraw()
+
+
+## 拒绝脉冲是否正在显示（守门读它；绘制侧自己判，别处不要拿它分支）。
+func is_denial_showing() -> bool:
+	return _denied_elapsed >= 0.0
 
 
 ## 逐行熄灭的每一帧：碰撞体跟着幕高走，绘制跟着碰撞体走（同一真值来源，D36 第 6 条 b）。
@@ -193,6 +256,18 @@ func _key_pickup() -> KeyPickup:
 	var node := get_node_or_null(key)
 	if node is KeyPickup:
 		return node
+	return null
+
+
+## 感应带里那个「算玩家」的活人，没有则 null。尸体不算玩家（D42）这条判据现在只有
+## 这一个来源：刷卡与拒绝提示两条路各自都要它，分开写就会有一天只改一边。
+func _live_courier() -> Player:
+	for body in _reader.get_overlapping_bodies():
+		if not body.is_in_group(&"player"):
+			continue
+		var courier := body as Player
+		if courier != null and not courier.is_dead:
+			return courier
 	return null
 
 
@@ -233,8 +308,13 @@ func _draw_frame() -> void:
 	TileDraw.tile(self, TEX_HEADER, x0, top, width, 2.0)
 	# LED 在演出**开始**的那一帧就转青：它是「认卡了」的即时回执（D41）。
 	var lit: bool = is_latched or _swipe_elapsed >= 0.0
-	draw_rect(Rect2(x0 + width * 0.5 - 2.0, top - 8.0, 4.0, 4.0), LED_SOCKET)
-	draw_rect(Rect2(x0 + width * 0.5 - 1.0, top - 7.0, 2.0, 2.0), LED_LIT if lit else LED_LOCKED)
+	# 三态优先级：认了卡（青）> 正在拒绝（红）> 锁着（琥珀）。红与青在同一帧互斥，
+	# 由扫描侧那句 `is_held()` 早退保证，这里不再判一次；`denied` 只可能盖住琥珀。
+	var denied: bool = not lit and _denied_elapsed >= 0.0
+	draw_rect(Rect2(x0 + width * 0.5 - 2.0, top - 8.0, 4.0, 4.0),
+			LED_DENIED_SOCKET if denied else LED_SOCKET)
+	draw_rect(Rect2(x0 + width * 0.5 - 1.0, top - 7.0, 2.0, 2.0),
+			LED_LIT if lit else (LED_DENIED if denied else LED_LOCKED))
 
 
 ## 光幕（下带）：残辉 → 幕体 → 外侧光晕 → 左右收边 → 断电前沿 → 底部接地行，
