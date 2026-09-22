@@ -608,7 +608,7 @@ func _test_afterimage() -> void:
 	await _frame(30)
 	var rungs := _afterimage_rungs(emitter)
 	var active := emitter.active_steps()
-	_check("默认参数：链上 5 格、池子里 8 格（多出来那 3 格永远不该成平台）",
+	_check("参照档（400×0.20 → 节距 80）：链上 5 格、池子里 8 格（多出来那 3 格永远不该成平台）",
 		active == 5 and rungs.size() == 8)
 	var tops30: Array = []
 	for k in active:
@@ -646,12 +646,56 @@ func _test_afterimage() -> void:
 	TimeManager.notify_movement_intent(true)
 	await _frame(2)
 	var stand_y: float = emitter.global_position.y + emitter.step_top_y(2)
+	var column_x := emitter.global_position.x
 	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
-	walker.position = Vector2(emitter.global_position.x, stand_y - Player.COLLISION_HALF_HEIGHT)
+	walker.position = Vector2(column_x, stand_y - Player.COLLISION_HALF_HEIGHT)
 	rig.add_child(walker)
+	# D48 的四条判死断言都从这一个计数器读。它同时是"信号名没被改坏"的活证：
+	# 改名之后 LevelBase 那套按信号名的自动接线会静默不接，这里当场点不出来。
+	var poked: Array[Node2D] = []
+	emitter.touched_player.connect(func(p: Node2D) -> void: poked.append(p))
 	await _frame(20)
 	_check("冻住的格接得住一个玩家（20 拍没下沉）",
 		absf(walker.position.y - (stand_y - Player.COLLISION_HALF_HEIGHT)) < 1.0)
+	var sink: float = (walker.position.y + Player.COLLISION_HALF_HEIGHT) - stand_y
+	_check("站在冻结的踏面上 20 拍：一个判死信号都没有（踩住了不算 inside）", poked.is_empty())
+	_check("物理把人停在踩面上的穿透实测 %s px，留在内缩带 2 px 里" % str(sink), absf(sink) < 2.0)
+
+	# 松手 → 格子从脚底下走掉（它 400 px/s，人从零速起落）→ 再冻结。这几拍上一格一定会
+	# 压到头顶（站在踩面上时头顶离上一格只有 18 px），但**落脚点还是虚的**：按 D48 只问
+	# 脚底的口径，这里必须一句都不响。拿身体重叠判死的话这一档当场就是死刑。
+	poked.clear()
+	TimeManager.notify_movement_intent(false)
+	await _frame(10)
+	var grazed := false
+	for k in emitter.active_steps():
+		if emitter.step_rect(k).intersects(walker.collision_rect()):
+			grazed = true
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("解冻 10 拍后再冻结：上一格已压到他身上（%s），但落脚点是虚的 → 不判死"
+		% str(grazed), grazed and poked.is_empty())
+
+	# 反过来：把他钉在格子身体里（脚底在踩面以下 20 px）再冻结 —— 必须点名，且点的是他。
+	# 流动那几拍逐帧跟着格子挪：这一档验的是"冻结那一刻他压在格子里"，不是他会掉到哪儿。
+	poked.clear()
+	TimeManager.notify_movement_intent(false)
+	for i in 8:
+		await _frame(1)
+		if not emitter.is_solid():
+			walker.position = Vector2(column_x,
+				emitter.global_position.y + emitter.step_top_y(2) + 20.0 - Player.COLLISION_HALF_HEIGHT)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("人在格子里时冻结 → 判死信号恰好发一次，且点名的就是他",
+		poked.size() == 1 and poked[0] == walker)
+
+	# 同一个位置、世界继续流着：链从他身上穿过去不算账 —— 判死只属于"刚刚变实体"那一帧。
+	poked.clear()
+	TimeManager.notify_movement_intent(false)
+	await _frame(16)
+	_check("流动期整条链从他身上穿过去：一个信号都不发", poked.is_empty())
+
 	TimeManager.reset_state()
 	# 40 拍而不是 20：无头这一跑物理拍不是整整 1/60，20 拍只落下一个身位的大半，
 	# 差的那几像素是自由落体的时间不够，不是"没穿过去"。
@@ -680,6 +724,14 @@ func _afterimage_instance(rig: Node, at: Vector2) -> AfterimageEmitter:
 	var emitter := load("res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn") \
 		.instantiate() as AfterimageEmitter
 	emitter.position = at
+	# 自己钉一档参照参数，不跟脚本默认值走：这几个数归摆图的人随时调（D47 落档后用户已把
+	# 默认改成 800×0.40 → 节距 320），照着默认值断言"链上 5 格"第二天就会红。
+	# 进树前赋好，`_ready()` 的 `_rebuild()` 才按这档建池子。
+	emitter.fall_speed = 400.0
+	emitter.emit_interval = 0.20
+	emitter.step_size = 32.0
+	emitter.reach = 320.0
+	emitter.max_steps = 8
 	rig.add_child(emitter)
 	return emitter
 

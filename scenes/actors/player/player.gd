@@ -373,3 +373,15 @@ func _apply_body_height(h: float) -> void:
 	var center := Vector2(0.0, COLLISION_HALF_HEIGHT - h * 0.5)
 	if _collision.position != center:
 		_collision.position = center
+
+
+## 世界坐标下此刻的身体矩形。给"需要知道人在哪一格里"的构件用（D48 残影踏板的判死带）。
+## 读的是真的那块 shape 而不是按常量重算：蹲伏真的缩盒（D27），重算的版本会跟物理对不上。
+## 有了它，构件就不必去摸 `_collision` / `_body_rect` —— 与 HazardBase 那条
+## 「判死不引用 Player 内部」同一口径。
+func collision_rect() -> Rect2:
+	if _body_rect == null:
+		return Rect2(global_position, Vector2.ZERO)
+	var half := _body_rect.size * 0.5
+	var center := global_position + _collision.position
+	return Rect2(center - half, _body_rect.size)

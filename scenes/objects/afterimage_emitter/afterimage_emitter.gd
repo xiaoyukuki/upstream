@@ -9,10 +9,12 @@ extends Node2D
 ##
 ## 主题 = CRT 余辉，是 D46 那条符号的推论而不是新设定：画面被钉住的那一刻，一直在落的
 ## 东西被钉在半空、成一串能踩的实体。所以"无形"与"有形"不是两个开关，是同一件事的两面 ——
-## **它移动时无形、有形时不动**，于是永远压不到人（D47 承载安全那根柱子）。
+## **它移动时无形、有形时不动**，所以它永远不会把人推着走。
+## 但它**会**杀人（D47 那条"永远压不到人"已被 D48 订正）：世界转冻结那一帧，谁的身体还压在
+## 格子里面，谁就被钉在里面 —— 判死走 HazardBase 同一个 `touched_player` 契约。
 ##
-## 皮肤按选型图 A 行：流动 = 亮青描边 + 极淡填充（有轮廓没肉），冻结 = 实心青 + 顶唇一道亮白
-## （和实体瓦片同一套话）。四行候选只差流动态怎么说"穿得过去"，冻结态本来就一种。
+## 皮肤按 D48：流动 = 一坨竖向渐变的余辉 + 往上溶的尾迹 + 踩面一道暗线（没有描边），
+## 冻结 = 实心青 + 顶唇一道亮白（和实体瓦片同一套话）。
 ##
 ## 位置是 `_clock` 的纯函数：第 k 格顶边在 `y = fmod(clock, T)·V + k·(V·T)`。不累加逐帧位移、
 ## 不实例化不销毁，于是按 R 重开、存档回灌、冻结期间天然停在原处三件事一起免费。
@@ -27,25 +29,45 @@ const SOLID_LAYER: int = 4
 const STEP_SOLID: Color = Color8(110, 230, 240)
 const STEP_LIP: Color = Color8(206, 222, 250)
 const STEP_EDGE: Color = Color8(61, 127, 132)
-const SHELL_FILL: Color = Color8(110, 230, 240, 46)
-const SHELL_LINE: Color = Color8(110, 230, 240, 210)
-const SHELL_LIP: Color = Color8(206, 222, 250, 120)
+## 流动态（D48）：一坨正在溶的余辉，不给描边。身体上暗下亮（下面那侧是运动的先锋），
+## 尾迹在身体**上方**往上溶到零 —— 余辉落在身后，这条方向顺便说清"它在往下落"。
+const GHOST_TOP: Color = Color8(110, 230, 240, 26)
+const GHOST_BOTTOM: Color = Color8(110, 230, 240, 72)
+const TAIL_NEAR: Color = Color8(110, 230, 240, 34)
+## 唯一保留的一条直线 = 踩面预告（格子的顶边）。暗到不足以被读成"实的"，
+## 但判死带就压在这一格里，"哪儿算 inside"得看得见。
+const TREAD_LINE: Color = Color8(206, 222, 250, 110)
+## 只给编辑器的摆位辅助线用，比游戏内的残影清楚一档才不碍事。
+const GUIDE: Color = Color8(110, 230, 240, 150)
+const GUIDE_LIP: Color = Color8(206, 222, 250, 90)
 const HOUSING: Color = Color8(124, 136, 176)
 const HOUSING_DARK: Color = Color8(22, 26, 42)
 ## 喷嘴外壳占的那一块（原点以上），摆图时看得见的"这里在生成东西"。
 const HOUSING_W: float = 24.0
 const HOUSING_H: float = 12.0
 
+## 判死契约（D48）：与 HazardBase 同名同签名。`LevelBase._bind_hazards` 按信号名全子树扫，
+## 所以摆进关卡子树即接进死亡流程 —— 不拖引用、不新建第三套时钟；`_dying` 那道闩锁已经把
+## "死在死亡那一拍里"挡掉（刷卡门/祭坛那两拍钉住冻结时同理，站着不动本来就不在该判死）。
+signal touched_player(player: Node2D)
+
+## 判死带相对整格内缩的余量。物理把人停在踩面上会留一丝穿透（实测 5e-6 px 量级），
+## 内缩就把"踩住了"和"被钉在里面"分开。
+const KILL_INSET: float = 2.0
+## 判死只问**落脚点**：脚底往上这一条薄带。头被上一格蹭到不算 —— 节距 80 时站在踩面上
+## 头顶离上一格只有 18 px，一松手链就追上来，拿身体重叠判死等于"松手即死刑"。
+const FEET_PROBE: float = 2.0
+
 ## 下坠速度（px/s，世界时间）。常量而非加速：加速会让相邻两格的间隔随下落时间线性涨，
 ## "整条都是台阶"就只在一条窄带里成立（D47 被否的第 2 条）。
-@export var fall_speed: float = 400.0:
+@export var fall_speed: float = 800.0:
 	set(value):
 		fall_speed = value
 		queue_redraw()
 
 ## 生成间隔（秒，世界时间）。节距 = fall_speed × 它，是算出来的、不是手填的。
 ## 上限是"屏上至少两格"：T ≤ 房间净高 / (2V)，再大就读不出"一串在落的东西"。
-@export var emit_interval: float = 0.20:
+@export var emit_interval: float = 0.40:
 	set(value):
 		emit_interval = maxf(value, 0.001)
 		queue_redraw()
@@ -102,6 +124,10 @@ func _physics_process(_delta: float) -> void:
 	if solid != _was_solid:
 		_was_solid = solid
 		queue_redraw()
+		if solid:
+			# 只在"刚刚变实体"这一帧查。流动期它本来就穿人而过、冻结期它自己又不动，
+			# 每帧查是白查，还会在死亡那一拍里对着已经躺下的人反复点名。
+			_check_imprisoned()
 	if solid:
 		return
 	_clock += d
@@ -161,6 +187,32 @@ func _apply_layers(solid: bool) -> void:
 			_bodies[i].collision_layer = want
 
 
+## 第 i 格在世界里的方块。刻意从格子自己的变换算，不按公式重算：
+## 画的是它、撞的是它、判死的也是它，三者必须是同一个矩形（D36 第 6 条），
+## 而拿全局变换算的话喷嘴被旋转或缩放也不会说谎。
+func step_rect(i: int) -> Rect2:
+	var half := step_size * 0.5
+	var t := _bodies[i].global_transform
+	var a := t * Vector2(-half, -half)
+	var b := t * Vector2(half, half)
+	return Rect2(a, b - a).abs()
+
+
+## D48：冻结那一刻，谁的**落脚点**还被压在格子里，谁就被钉在里面 = 死。
+## 站在踩面上不算、头被上一格蹭到也不算（见 FEET_PROBE）—— 这构件的用法就是站在一格
+## 冻住的残影上，把"松手"变成死刑就没法玩了。
+func _check_imprisoned() -> void:
+	var hero := get_tree().get_first_node_in_group(&"player") as Player
+	if hero == null:
+		return
+	var body := hero.collision_rect()
+	var feet := Rect2(body.position.x, body.end.y - FEET_PROBE, body.size.x, FEET_PROBE)
+	for i in active_steps():
+		if step_rect(i).grow(-KILL_INSET).intersects(feet):
+			touched_player.emit(hero)
+			return
+
+
 func _rebuild() -> void:
 	if not is_node_ready():
 		return
@@ -206,19 +258,29 @@ func _draw() -> void:
 			draw_rect(Rect2(r.position.x, r.position.y, r.size.x, 2.0), STEP_LIP)
 			draw_rect(Rect2(r.position.x - 1.0, r.position.y - 1.0, r.size.x + 2.0, 1.0), STEP_LIP)
 		else:
-			# 流动 = 穿得过去的东西：给壳不给肉
-			draw_rect(r, SHELL_FILL)
-			draw_rect(r, SHELL_LINE, false, 1.0)
-			draw_rect(Rect2(r.position.x + 4.0, r.position.y + 4.0, 1.0, r.size.y - 8.0), SHELL_LIP)
-			draw_rect(Rect2(r.end.x - 5.0, r.position.y + 4.0, 1.0, r.size.y - 8.0), SHELL_LIP)
+			# 流动 = 穿得过去的残影。刻意不给整圈描边：一圈 1 px 的直线会被读成
+			# "一块只是没填色的实心砖"，那正是 D47 那版 A 皮肤被裁掉的原因（D48）。
+			_fade_rect(r.position.x, r.position.y, r.end.x, r.end.y, GHOST_TOP, GHOST_BOTTOM)
+			# 尾迹比身体窄一档，免得整列连成一根柱子、读不出格的边界
+			_fade_rect(r.position.x + 5.0, r.position.y - step_size, r.end.x - 5.0, r.position.y,
+				Color(0.0, 0.0, 0.0, 0.0), TAIL_NEAR)
+			draw_rect(Rect2(r.position.x, r.position.y, r.size.x, 1.0), TREAD_LINE)
 	_draw_housing()
 	if not Engine.is_editor_hint():
 		return
 	# 摆图辅助：链活多远、每格的踩面在哪
-	draw_line(Vector2(0.0, reach), Vector2(0.0, 0.0), SHELL_LINE, 1.0)
+	draw_line(Vector2(0.0, reach), Vector2(0.0, 0.0), GUIDE, 1.0)
 	for k in active_steps():
 		var y := float(k) * pitch()
-		draw_line(Vector2(-half - 6.0, y), Vector2(half + 6.0, y), SHELL_LIP, 1.0)
+		draw_line(Vector2(-half - 6.0, y), Vector2(half + 6.0, y), GUIDE_LIP, 1.0)
+
+
+## 竖向渐变矩形：上边 `top`、下边 `bottom`，中间按顶点色插值。
+## 用 draw_polygon 而不是叠几层 draw_rect：叠出来的台阶在暗底上看得出棱。
+func _fade_rect(x0: float, y0: float, x1: float, y1: float, top: Color, bottom: Color) -> void:
+	draw_polygon(
+		PackedVector2Array([Vector2(x0, y0), Vector2(x1, y0), Vector2(x1, y1), Vector2(x0, y1)]),
+		PackedColorArray([top, top, bottom, bottom]))
 
 
 func _draw_housing() -> void:

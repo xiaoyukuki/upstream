@@ -27,6 +27,13 @@
 
 局限：冻结列是**离线同算式**。构件真要上线前还得用 tools/frame_grab.tscn 实拍一次，
 别拿这张图当实机验收。
+
+—— 以上是 D47 那一版选型图的口径。D48 换的是**同一个问题的下一轮**：用户看实拍图后判
+「没变实体时边框太明显」，A 那圈亮青描边退役（保留在图上当对照行），换三档更软的说法。
+D48 同时给这个构件加了判死——冻结那一刻落脚点还压在格子里就算被埋——所以流动态这一版
+要同时满足两件相反的事：**读得出「这是虚的、能穿过去」**，又**量得准「脚会落在哪一格」**。
+描边一去掉，第二件就全靠身体那一坨渐变的边界：F/G 各留一条踩面线（差别只给多少墨），
+H 连这条都不给 —— 那一行就是"完全不直线"的代价长什么样。
 """
 import os
 import sys
@@ -40,7 +47,7 @@ from gen_freeze_filter_preview import crt
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES = os.path.join(ROOT, "assets", "ui", "frames")
 SLIME = os.path.join(ROOT, "assets", "player", "slime")
-OUT = os.path.join(ROOT, "assets", "props", "preview_afterimage.png")
+OUT = os.path.join(ROOT, "assets", "props", "preview_afterimage_flow.png")
 
 W, H = 1280, 720
 PAL = G.STYLES["g"]
@@ -116,6 +123,50 @@ def terrain_solid(d, r):
     d.rectangle(r, outline=GROUT)
 
 
+def _vgrad(d, r, top, bottom):
+    """竖向渐变的半透明填充，一行一行插值 alpha。
+    叠两三层矩形会在暗底上看出台阶，逐行画才溶得开。"""
+    h = r[3] - r[1]
+    for i in range(h):
+        k = i / float(max(h - 1, 1))
+        col = tuple(int(round(top[c] + (bottom[c] - top[c]) * k)) for c in range(4))
+        d.line([(r[0], r[1] + i), (r[2], r[1] + i)], fill=col)
+
+
+def tail_rect(r):
+    """尾迹落在身体**上方**：余辉在物体身后，它往下落、尾巴就朝上。
+    左右各窄一档（5 世界 px），免得整列连成一根柱子、读不出格的边界。"""
+    return [r[0] + 10, r[1] - (r[3] - r[1]), r[2] - 10, r[1]]
+
+
+def flow_ghost(d, r):
+    """F = D48 实装那一版：整圈描边去掉（那条 1 px 直线被读成"没填色的砖"），
+    换成身体上暗下亮 + 往上溶到零的尾迹 + 踩面一道暗线。直线只剩"踩这条"一处。"""
+    _vgrad(d, r, G.rgba(CYAN, 26), G.rgba(CYAN, 72))
+    _vgrad(d, tail_rect(r), G.rgba(CYAN, 0), G.rgba(CYAN, 34))
+    d.line([(r[0], r[1]), (r[2], r[1])], fill=G.rgba(LIP, 110))
+
+
+def flow_streak(d, r):
+    """G：身体几乎不给，墨迹全押在尾迹上。最贴"残影"两个字，
+    代价是格的上下边界最含糊 —— 而 D48 之后判死带就压在那一格里。"""
+    _vgrad(d, r, G.rgba(CYAN, 8), G.rgba(CYAN, 26))
+    _vgrad(d, tail_rect(r), G.rgba(CYAN, 0), G.rgba(CYAN, 64))
+    d.line([(r[0], r[1]), (r[2], r[1])], fill=G.rgba(LIP, 80))
+
+
+def flow_bloom(d, r):
+    """H：中心一团辉光，四条边一条直线都不给。最像"没被钉住的光"，
+    也最容易让人误判落脚点到底在不在它里面。"""
+    _vgrad(d, r, G.rgba(CYAN, 14), G.rgba(CYAN, 20))
+    inset = (r[2] - r[0]) // 8
+    d.rectangle([r[0] + inset, r[1] + inset, r[2] - inset, r[3] - inset],
+                fill=G.rgba(CYAN, 30))
+    core = (r[2] - r[0]) // 4
+    d.rectangle([r[0] + core, r[1] + core, r[2] - core, r[3] - core],
+                fill=G.rgba(CYAN, 44))
+
+
 def draw_rung(d, r, kind, frozen):
     if frozen:
         if kind == "E":
@@ -125,7 +176,13 @@ def draw_rung(d, r, kind, frozen):
         # 冻结 = 这一格此刻是硬的：顶唇再压一道白，和流动态彻底拉开
         d.line([(r[0], r[1] - 1), (r[2], r[1] - 1)], fill=LIP, width=2)
         return
-    if kind in ("A", "E"):                                # 薄壳：有轮廓没肉
+    if kind == "F":
+        flow_ghost(d, r)
+    elif kind == "G":
+        flow_streak(d, r)
+    elif kind == "H":
+        flow_bloom(d, r)
+    elif kind in ("A", "E"):                                # 薄壳：有轮廓没肉
         d.rectangle(r, fill=G.rgba(CYAN, 46))
         d.rectangle(r, outline=G.rgba(CYAN, 210))
         d.line([(r[0] + 4, r[1] + 4), (r[0] + 4, r[3] - 4)], fill=G.rgba(LIP, 120))
@@ -210,6 +267,21 @@ def readouts(flow, froz):
                 100 * _coverage(flow, rc, w_w) // area, w_w, w_f))
 
 
+def _wrap(d, text, font, max_w):
+    """标签列只有 340 px：中文没有空格可断，只能逐字量宽折行。"""
+    lines, cur, cur_w = [], "", 0.0
+    for ch in text:
+        w = d.textlength(ch, font=font)
+        if cur and cur_w + w > max_w:
+            lines.append(cur)
+            cur, cur_w = ch, w
+        else:
+            cur, cur_w = cur + ch, cur_w + w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def tile(img, src_w, src_h, fill_h=False):
     cell = Image.new("RGB", (CELL_W, CELL_H), (12, 12, 16))
     sc = (CELL_H / float(src_h)) if fill_h else min(CELL_W / float(src_w), CELL_H / float(src_h))
@@ -237,11 +309,14 @@ def main():
 
     font, small = G._font(15), G._font(12)
     names = (
-        ("A  thin shell", "A", "有轮廓没肉：最直接的\"这是虚的\""),
-        ("B  scanline bars", "B", "条纹 = 没被钉住，跟 D46 那层滤镜同一套语言"),
-        ("C  light column", "C", "流动=一束连续的光，冻结=断成一串台阶（两态差最大）"),
-        ("D  motion streak", "D", "最虚：只剩竖直拖影，实体感最低"),
-        ("E  terrain skin", "E", "试错：借地皮反而更糊，body/wall 掉到 2.2"),
+        ("A  thin shell", "A", "D47 那版，已退役作对照：亮青描边 + 极淡填充。用户判"
+                               "「没变实体时边框太明显」——一圈直线读成「没填色的砖」"),
+        ("F  ghost + tail", "F", "★ 现在实装这版：描边全去掉，身体上暗下亮 + 往上溶的尾迹 +"
+                                 " 踩面一道暗线。直线只剩一处，且它暗到读不出「这是实的」"),
+        ("G  tail only", "G", "更狠：身体几乎不给，墨迹全押在尾迹上。最贴「残影」两个字，"
+                              "代价是格的上下边界最含糊"),
+        ("H  core bloom", "H", "中心一团辉光，四条边一条直线都不给。最像「没被钉住的光」，"
+                               "也最难判断落脚点到底在不在它里面"),
     )
 
     head_h = 58
@@ -249,7 +324,7 @@ def main():
     sheet = Image.new("RGB", (LABEL_W + (CELL_W + GAP) * 4 + GAP,
                               head_h + row_h * (len(names) + 1) + 18), (16, 18, 24))
     d = ImageDraw.Draw(sheet)
-    d.text((12, 8), "AFTERIMAGE STEP (D47)   base = real level_1 frame spot2_raw   "
+    d.text((12, 8), "AFTERIMAGE STEP / flow skin v2 (D48)   base = real level_1 frame spot2_raw   "
                     "frozen column = same-formula CRT (linearFac 1.3 / scan 0.10 / chroma)   "
                     "block 32 world px, rung pitch 80 px (V 400 x T 0.20 s), 2 rungs",
            fill=LIP, font=G._font(17))
@@ -275,7 +350,8 @@ def main():
         froz_raw = draw_variant(base, sprites, kind, frozen=True)
         froz = crt(froz_raw, **SHIPPED)
         d.text((12, y0 + 6), label, fill=LIP, font=font)
-        d.text((12, y0 + 26), note, fill=(124, 136, 176), font=small)
+        for j, ln in enumerate(_wrap(d, note, small, LABEL_W - 24)):
+            d.text((12, y0 + 26 + j * 16), ln, fill=(124, 136, 176), font=small)
         sheet.paste(tile(flow, W, H), (xs[0], y0))
         sheet.paste(tile(froz, W, H), (xs[1], y0))
         sheet.paste(tile(crop_of(flow), CROP[0], CROP[1], True), (xs[2], y0))

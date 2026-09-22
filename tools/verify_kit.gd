@@ -95,6 +95,7 @@ const NODE_PATHS := {
 const DOOR_SCRIPT := "res://scenes/objects/door/door.gd"
 const BUTTON_SCRIPT := "res://scenes/objects/button_plate/button_plate.gd"
 const ALTAR_SCRIPT := "res://scenes/objects/ability_altar/ability_altar.gd"
+const AFTERIMAGE_SCRIPT := "res://scenes/objects/afterimage_emitter/afterimage_emitter.gd"
 const SENSOR_SCRIPT := "res://scenes/objects/sensor_zone/sensor_zone.gd"
 const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
 const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
@@ -341,7 +342,7 @@ func _verify_m5_geometry() -> void:
 ##    8 vs 5，多余那三格两态都必须不在层上，否则冻住时是"看不见却能踩"。
 ## 位置纯函数与冻结不动身由 kit_selftest 第 12 组在真帧下验。
 func _verify_afterimage() -> void:
-	var path := "res://scenes/objects/afterimage_emitter/afterimage_emitter.gd"
+	var path := AFTERIMAGE_SCRIPT
 	var src := FileAccess.get_file_as_string(path)
 	if src.contains("func _process("):
 		_fail("AfterimageEmitter 里出现了 _process：实体切换只能走物理通道（D47）")
@@ -353,10 +354,24 @@ func _verify_afterimage() -> void:
 		return
 
 	var emitter = _enter("res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn")
+	# 默认档只验结构，不验数值：这几个数归摆图的人随时调（D47 落档后用户已把默认从
+	# 400×0.20 改成 800×0.40），照默认值断言"节距必等于 80"等于把守门绑在他的手感上。
+	if emitter.active_steps() < 1 or emitter.active_steps() > emitter.max_steps:
+		_fail("默认档的链上 %d 格，落在 [1, max_steps=%d] 之外"
+			% [emitter.active_steps(), emitter.max_steps])
+	if emitter.pitch() <= emitter.step_size:
+		_fail("默认节距 %s 比格宽 %s 还小：相邻两格互相穿模，链会糊成一坨"
+			% [str(emitter.pitch()), str(emitter.step_size)])
+	# 下面所有数值断言都跑在这一档显式参数上（= D47 表里那一档），与脚本默认值脱钩。
+	emitter.fall_speed = 400.0
+	emitter.emit_interval = 0.20
+	emitter.step_size = 32.0
+	emitter.reach = 320.0
+	emitter.max_steps = 8
 	if not is_equal_approx(emitter.pitch(), 80.0):
-		_fail("默认节距 %s（应 80 = 400×0.20，正好落在 16 px 网格上）" % str(emitter.pitch()))
+		_fail("参照节距 %s（应 80 = 400×0.20，正好落在 16 px 网格上）" % str(emitter.pitch()))
 	if emitter.active_steps() != 5:
-		_fail("默认链上 %d 格（reach 320 / 节距 80 + 1 = 5）" % emitter.active_steps())
+		_fail("参照档链上 %d 格（reach 320 / 节距 80 + 1 = 5）" % emitter.active_steps())
 	var bodies := _pool_bodies(emitter)
 	if bodies.size() != emitter.max_steps:
 		_fail("池子里 %d 格，max_steps=%d 对不上" % [bodies.size(), emitter.max_steps])
@@ -425,8 +440,45 @@ func _verify_afterimage() -> void:
 	if emitter.active_steps() != 7:
 		_fail("reach 480 / 节距 80 应要 7 格，实际 %d" % emitter.active_steps())
 
+	_verify_afterimage_kill(emitter, bodies)
 	root.remove_child(emitter)
 	emitter.free()
+
+
+## D48 的判死契约，全部是结构与几何，跑在真物理里的那几条归 kit_selftest 第 12 组。
+func _verify_afterimage_kill(emitter, bodies: Array) -> void:
+	if not emitter.has_signal("touched_player"):
+		_fail("AfterimageEmitter 不发 touched_player：判死靠 LevelBase 按信号名自动接线，改名即静默失效")
+		return
+	# 它不是 Area2D，所以关卡侧那条"判死区一律 layer 0 / mask 2"的扫描跳得过它。
+	# 真有人往它身上加了探测区，这条就会响——加完之后它必须回去受层契约管。
+	if _count_areas(emitter) > 0:
+		_fail("AfterimageEmitter 子树里出现了 Area2D：它得回去受危险物层契约管（改 _check_level_hazards）")
+	var inset: float = (load(AFTERIMAGE_SCRIPT) as GDScript).get_script_constant_map()["KILL_INSET"]
+	var cell := emitter.step_rect(0) as Rect2
+	if not is_equal_approx(cell.size.x, emitter.step_size) or not is_equal_approx(cell.size.y, emitter.step_size):
+		_fail("判死方块 %s 与格宽 %s 不等：判死的不是画出来、撞到的那一格"
+			% [str(cell.size), str(emitter.step_size)])
+	if not is_equal_approx(cell.get_center().x, (bodies[0] as Node2D).global_position.x) \
+			or not is_equal_approx(cell.get_center().y, (bodies[0] as Node2D).global_position.y):
+		_fail("判死方块没对准第 0 格的碰撞体：索引或偏移接错了")
+	var band := cell.grow(-inset)
+	if band.size.x <= 0.0 or band.size.y <= 0.0:
+		_fail("内缩 %s px 之后判死带塌了（格子 %s）：这么小的格根本没法分辨踩住与陷进去"
+			% [str(inset), str(cell.size)])
+	# 踩面 = 格子顶边。它必须落在带子外面，否则"站上去"就等于"陷进去"，构件直接没法用。
+	if band.position.y <= cell.position.y:
+		_fail("判死带上沿 %s 没压在格子顶边 %s 之下：站在踩面上会被判死"
+			% [str(band.position.y), str(cell.position.y)])
+
+
+func _count_areas(node: Node) -> int:
+	var total := 0
+	for child in node.get_children():
+		if child is Area2D:
+			total += 1
+		total += _count_areas(child)
+	return total
 
 
 ## 喷嘴建的那池挡路格（运行期 add_child，按创建序 = 链上的 k 序）。TimeReceiver 也是子节点，
@@ -468,9 +520,12 @@ func _check_area_layers(area: Area2D, label: String, want_layer: int) -> void:
 
 ## 关卡实例里的危险物层契约。发现判据与 LevelBase._bind_hazards 同一个信号名 ——
 ## 关卡里摆的每个危险物在这里按同一套规则再过一遍。
+## 只查 Area2D：AfterimageEmitter 也发 `touched_player`（D48 判死），但它是 Node2D +
+## 几何判定，压根没有 Area2D 可供查层。把形参写成 Area2D 会让这一句在传它时硬报错，
+## 而硬报错 = 后面整段静默跳过、failures 照样是 0（那个假绿已记在手册 §10）。
 func _check_level_hazards(node: Node, path: String) -> void:
-	if node.has_signal("touched_player"):
-		_check_area_layers(node, "%s/%s" % [path, str(node.name)], 0)
+	if node.has_signal("touched_player") and node is Area2D:
+		_check_area_layers(node as Area2D, "%s/%s" % [path, str(node.name)], 0)
 	for child in node.get_children():
 		_check_level_hazards(child, path)
 

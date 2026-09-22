@@ -235,6 +235,13 @@ def _cr(a, b):
 
 
 def _font(size):
+    # PIL 自带的位图默认字体没有 CJK 字形，中文标注会整排糊成方块。
+    for path in ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf",
+                 "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
     try:
         return ImageFont.load_default(size=size)
     except Exception:
