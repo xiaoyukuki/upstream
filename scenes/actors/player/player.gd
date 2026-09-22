@@ -385,3 +385,14 @@ func collision_rect() -> Rect2:
 	var half := _body_rect.size * 0.5
 	var center := global_position + _collision.position
 	return Rect2(center - half, _body_rect.size)
+
+
+## 让**玩家自己的身体**去吃这一段位移（D49 活塞踏板的「挤开」）。走 `move_and_collide` 而不是
+## 改 `global_position`：他要照常撞地形，背后有墙就停在那儿 —— 构件据此夹住自己，
+## 于是"把人夹进墙里"在这个结构里不发生，构件不必写第二条挤压判定。
+## 只改位置、绝不碰 `velocity`：他的水平速度每帧都被 `_apply_horizontal` 的加速与摩擦重写，
+## 掺进去等于两方抢同一个数，推人的一方就再也不知道人被推走了多少。
+func push_by(motion: Vector2) -> void:
+	if is_dead or motion == Vector2.ZERO:
+		return
+	move_and_collide(motion)

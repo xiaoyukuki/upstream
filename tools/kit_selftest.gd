@@ -23,6 +23,10 @@ extends Node
 ## 12) 残影踏板（D47）：冻结那一拍整条链上 time_solid 且一格不挪，松手 0.08 s 缓冲里照旧
 ##     踩着，解冻即回无形；位置只是世界时钟的纯函数（新实例同拍数重跑必与首跑同相）；
 ##     最后一条是真玩家站上去的承载判据 —— 冻着接得住、解冻穿得过。
+## 13) 活塞踏板（D49）：一组活塞接同一个按钮（多对一合法）；伸出/收回只跟按钮布尔量走，
+##     冻结即停在当前伸出量、松开只记意图；收回快过伸出且把落脚点从脚下抽干（人掉下去不是
+##     被带着沉进地里）；行程上有人时**挤开**他，他背后有墙则他自己被挡住、方块跟着停在接触面
+##     上走不满行程 —— 于是挤压不发生，且顶住期间不攒位移。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -205,6 +209,7 @@ func _ready() -> void:
 	await _test_grant_beat()
 	await _test_freeze_filter()
 	await _test_afterimage()
+	await _test_piston()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -752,6 +757,209 @@ func _afterimage_layers(rungs: Array, active: int, want_solid: bool) -> bool:
 		if (rungs[i] as StaticBody2D).collision_layer != want:
 			return false
 	return true
+
+
+## 第 13 组：活塞踏板（D49）。四档各钉一条"改坏了不会响、只有试玩才露馅"的：
+## a) 一组两块接同一个按钮（多对一合法），冻结即停在当前伸出量上、松开只记意图；
+## b) 收回明显快过伸出 —— 伸得慢到踩按钮的人跟得上，收得快到站不住；
+## c) 收回把落脚点从脚下抽干：人自己掉回地面，不是被方块带着沉进地里；
+## d) 行程上有人就**挤开**他；他背后有墙则他自己被挡住、方块跟着停在接触面上走不满行程，
+##    且顶住期间不攒位移（脱困那一帧不会攒出一发弹射）。
+func _test_piston() -> void:
+	# 活塞靠 player 组找人推，前面几组留一个人在树上就是替错的人做测试 —— 先点破再往下跑。
+	var leftovers := get_tree().get_nodes_in_group(&"player")
+	_check("开跑前场上没有残留玩家（%d 个）" % leftovers.size(), leftovers.is_empty())
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	# 地面：顶边落在 y=0，x 覆盖本组三段 fixture（5000 / 5300 / 5500）。
+	_solid_box(Vector2(5000.0, 20.0), Vector2(3000.0, 40.0))
+
+	# —— a：一组活塞 + 冻结 ——
+	var rig := Node2D.new()
+	rig.name = "PistonRig"
+	add_child(rig)
+	var plate := _plate_instance(rig, "Plate", Vector2(5000.0, -400.0))
+	var wall := _piston_instance(rig, plate, "Wall", Vector2(5000.0, -32.0), Vector2(64.0, 0.0))
+	var twin := _piston_instance(rig, plate, "Twin", Vector2(5000.0, -200.0), Vector2(64.0, 0.0))
+	_check("两块活塞接到同一个按钮（「一组」就是多对一，刻意不查重）",
+		wall._bound == plate and twin._bound == plate)
+	plate._set_pressed(true)
+	_check("按钮一踩两块同时转入伸出", wall.is_out and twin.is_out)
+	await _frame(10)
+	_check("10 拍后两块都在半路（同一条布尔量驱动的积分器）",
+		wall.progress() > 0.0 and wall.progress() < 1.0
+		and twin.progress() > 0.0 and twin.progress() < 1.0)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var wall_p: float = wall.progress()
+	var twin_p: float = twin.progress()
+	var wall_pos: Vector2 = wall.global_position
+	await _frame(12)
+	_check("冻结 12 拍：两块停在当前伸出量上一格不挪",
+		wall.progress() == wall_p and twin.progress() == twin_p
+		and wall.global_position == wall_pos)
+	plate._set_pressed(false)
+	_check("冻结中松开按钮只记下「该收回」，人还站在伸出量上", not wall.is_out)
+	await _frame(12)
+	_check("冻结中收回照样不推进（两个方向共用世界时钟，没有旁路）", wall.progress() == wall_p)
+	TimeManager.notify_movement_intent(false)
+	await _frame(6)
+	_check("解冻后两块一起往回收", wall.progress() < wall_p and twin.progress() < twin_p)
+	var guard := 0
+	while (wall.progress() > 0.0 or twin.progress() > 0.0) and guard < 200:
+		guard += 1
+		await get_tree().physics_frame
+	_check("收回走到底（两块都回到伸出量为 0，皮上只剩洞口那一截）",
+		wall.progress() == 0.0 and twin.progress() == 0.0)
+
+	# —— b：速度差。伸出 128 / 收回 512 px/s，只断言量级，不赌整数拍。——
+	plate._set_pressed(true)
+	var extend_frames := 0
+	while wall.progress() < 1.0 and extend_frames < 300:
+		extend_frames += 1
+		await get_tree().physics_frame
+	plate._set_pressed(false)
+	var retract_frames := 0
+	while wall.progress() > 0.0 and retract_frames < 300:
+		retract_frames += 1
+		await get_tree().physics_frame
+	_check("收回明显快过伸出（伸出 %d 拍 / 收回 %d 拍）" % [extend_frames, retract_frames],
+		extend_frames > 0 and retract_frames * 2 < extend_frames)
+	rig.queue_free()
+	await _frame(2)
+
+	# —— c：竖着伸出的一块当落脚点 ——
+	var rig2 := Node2D.new()
+	rig2.name = "RiserRig"
+	add_child(rig2)
+	var plate2 := _plate_instance(rig2, "Plate2", Vector2(5300.0, -400.0))
+	var riser := _piston_instance(rig2, plate2, "Riser", Vector2(5300.0, 0.0), Vector2(0.0, -64.0))
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	hero.position = Vector2(5300.0, -Player.COLLISION_HALF_HEIGHT)
+	add_child(hero)
+	await _frame(4)
+	_check("人站在洞口线上（收回态顶面与他脚底同一条线，一寸不嵌）",
+		absf(riser.block_rect().position.y - (hero.global_position.y + Player.COLLISION_HALF_HEIGHT)) < 1.0
+		and not riser.block_rect().intersects(hero.collision_rect()))
+	plate2._set_pressed(true)
+	guard = 0
+	while riser.progress() < 1.0 and guard < 300:
+		guard += 1
+		await get_tree().physics_frame
+	_check("伸到顶时人被带着升到踩面上（骑得上去）",
+		absf(hero.global_position.y - (-64.0 - Player.COLLISION_HALF_HEIGHT)) < 2.0)
+	_check("骑住时方块前缘就贴在他脚底下：挤到位而不吃进身体",
+		absf(riser.block_rect().position.y - (hero.global_position.y + Player.COLLISION_HALF_HEIGHT)) < 2.0
+		and not riser.block_rect().intersects(hero.collision_rect()))
+	plate2._set_pressed(false)
+	guard = 0
+	while riser.progress() > 0.0 and guard < 60:
+		guard += 1
+		await get_tree().physics_frame
+	_check("方块收回走完（%d 拍）时人还在半空 —— 是他自己在落，不是被带着沉" % guard,
+		riser.progress() == 0.0 and hero.global_position.y < -35.0)
+	_check("落脚抽干那一瞬方块与人身体不重叠（没被拽着往下走）",
+		not riser.block_rect().intersects(hero.collision_rect()))
+	guard = 0
+	while absf(hero.global_position.y + Player.COLLISION_HALF_HEIGHT) > 0.5 and guard < 120:
+		guard += 1
+		await get_tree().physics_frame
+	_check("掉回地面停住（脚底顶在 y=0，没有陷进地里）",
+		absf(hero.global_position.y + Player.COLLISION_HALF_HEIGHT) < 1.0)
+	rig2.queue_free()
+	await _frame(2)
+
+	# —— d：行程上有人 → 挤开；他背后有墙 → 停在接触面上 ——
+	var rig3 := Node2D.new()
+	rig3.name = "PushRig"
+	add_child(rig3)
+	var plate3 := _plate_instance(rig3, "Plate3", Vector2(5500.0, -400.0))
+	var pusher := _piston_instance(rig3, plate3, "Pusher",
+		Vector2(5500.0, -32.0), Vector2(64.0, 0.0))
+	hero.global_position = Vector2(5545.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	plate3._set_pressed(true)
+	guard = 0
+	while pusher.progress() < 1.0 and guard < 300:
+		guard += 1
+		await get_tree().physics_frame
+	_check("背后没墙：人被他自己的身体让出行程（推到他右侧 20 px 之外）",
+		hero.global_position.x > 5565.0 and pusher.progress() == 1.0)
+	_check("满行程时方块前缘仍然贴着他的后缘，一寸都没多走",
+		absf(pusher.block_rect().end.x - (hero.global_position.x - 10.0)) < 0.6
+		and not pusher.block_rect().intersects(hero.collision_rect()))
+	plate3._set_pressed(false)
+	guard = 0
+	while pusher.progress() > 0.0 and guard < 60:
+		guard += 1
+		await get_tree().physics_frame
+	hero.global_position = Vector2(5545.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	# 人先挪好再立墙：顺序反了就是把人嵌进地里，那是 fixture 的错不是构件的错。
+	_solid_box(Vector2(5585.0, -250.0), Vector2(30.0, 500.0)) # 左面 x=5570
+	await _frame(2)
+	plate3._set_pressed(true)
+	await _frame(60)
+	_check("背后有墙：他自己撞停在墙上（后缘 5550 贴着前缘，人没被夹进墙）",
+		absf(hero.global_position.x - 5560.0) < 1.5
+		and absf((hero.global_position.x + 10.0) - 5570.0) < 1.5)
+	_check("他被挡住 → 这块走不满行程（挤开不是把行程用完）",
+		pusher.progress() > 0.5 and pusher.progress() < 1.0)
+	_check("顶住期间方块前缘始终贴着他的后缘：挤压在这个结构里不发生",
+		absf(pusher.block_rect().end.x - (hero.global_position.x - 10.0)) < 0.6
+		and not pusher.block_rect().intersects(hero.collision_rect()))
+	var held: float = pusher.progress()
+	var x_held: float = hero.global_position.x
+	await _frame(30)
+	_check("顶住 30 拍不攒位移（位置读回实际值，脱困那一帧不会攒出一发弹射）",
+		absf(pusher.progress() - held) < 0.001 and absf(hero.global_position.x - x_held) < 0.001)
+
+	hero.queue_free()
+	rig3.queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
+
+
+## 触发源 fixture：放在人踩不到的高度，本组只手动 `_set_pressed` 驱动，不碰物理重叠。
+func _plate_instance(rig: Node, node_name: String, at: Vector2) -> ButtonPlate:
+	var plate := load("res://scenes/objects/button_plate/button_plate.tscn") \
+		.instantiate() as ButtonPlate
+	plate.name = node_name
+	plate.position = at
+	rig.add_child(plate)
+	return plate
+
+
+## 活塞 fixture。速度与参照档位在这里钉死，不跟脚本默认值走（同 `_afterimage_instance` 的理由：
+## 那几个数归摆图的人随时调，照默认值断言"伸出约 36 拍 / 收回约 9 拍"第二天就会红）。
+## `trigger` 用相对路径且在进树前赋好：`_ready()` 里那次 `_reconnect_trigger()` 才解析得动。
+func _piston_instance(rig: Node, source: ButtonPlate, node_name: String,
+		at: Vector2, travel: Vector2) -> PistonBlock:
+	var piston := load("res://scenes/objects/piston_block/piston_block.tscn") \
+		.instantiate() as PistonBlock
+	piston.name = node_name
+	piston.position = at
+	piston.travel_offset = travel
+	piston.extend_speed = 128.0
+	piston.retract_speed = 512.0
+	piston.trigger = NodePath("../" + String(source.name))
+	rig.add_child(piston)
+	return piston
+
+
+## 一块地形（layer 1），`at` = 盒中心。活塞的 collision_mask 写死 0，自己不会撞它；
+## 这里的地形只用来给人一个"背后有墙"的停住处和脚下这条线。
+func _solid_box(at: Vector2, size: Vector2) -> StaticBody2D:
+	var body := StaticBody2D.new()
+	body.collision_layer = 1
+	var col := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = size
+	col.shape = rect
+	body.add_child(col)
+	body.position = at
+	add_child(body)
+	return body
 
 
 ## 搭一个最小关卡：祭坛 + 尖刺 + 存档点 + 玩家，挂到传入父节点下。

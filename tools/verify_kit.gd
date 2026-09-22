@@ -7,6 +7,7 @@ const SCRIPTS := [
 	"res://scenes/objects/button_plate/button_plate.gd",
 	"res://scenes/objects/pendulum/pendulum.gd",
 	"res://scenes/objects/moving_block/moving_block.gd",
+	"res://scenes/objects/piston_block/piston_block.gd",
 	"res://scenes/objects/ability_altar/ability_altar.gd",
 	"res://scenes/objects/sensor_zone/sensor_zone.gd",
 	"res://scenes/objects/spikes/spikes.gd",
@@ -32,6 +33,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/button_plate/button_plate.gd",
 	"res://scenes/objects/pendulum/pendulum.gd",
 	"res://scenes/objects/moving_block/moving_block.gd",
+	"res://scenes/objects/piston_block/piston_block.gd",
 	"res://scenes/objects/ability_altar/ability_altar.gd",
 	"res://scenes/objects/sensor_zone/sensor_zone.gd",
 	"res://scenes/objects/spikes/spikes.gd",
@@ -51,6 +53,7 @@ const SCENES := [
 	"res://scenes/objects/button_plate/button_plate.tscn",
 	"res://scenes/objects/pendulum/pendulum.tscn",
 	"res://scenes/objects/moving_block/moving_block.tscn",
+	"res://scenes/objects/piston_block/piston_block.tscn",
 	"res://scenes/objects/ability_altar/ability_altar.tscn",
 	"res://scenes/objects/sensor_zone/sensor_zone.tscn",
 	"res://scenes/objects/spikes/spikes.tscn",
@@ -69,6 +72,7 @@ const EXPORTS := {
 	"res://scenes/objects/button_plate/button_plate.gd": ["width", "sensor_height", "press_depth"],
 	"res://scenes/objects/pendulum/pendulum.gd": ["amplitude_degrees", "period", "phase", "rod_length"],
 	"res://scenes/objects/moving_block/moving_block.gd": ["travel_offset", "block_size", "travel_speed", "block_color"],
+	"res://scenes/objects/piston_block/piston_block.gd": ["travel_offset", "block_size", "extend_speed", "retract_speed", "trigger"],
 	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "grant_time"],
 	"res://scenes/objects/sensor_zone/sensor_zone.gd": ["width", "height", "band_centre_y", "visible_in_game"],
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
@@ -96,6 +100,7 @@ const DOOR_SCRIPT := "res://scenes/objects/door/door.gd"
 const BUTTON_SCRIPT := "res://scenes/objects/button_plate/button_plate.gd"
 const ALTAR_SCRIPT := "res://scenes/objects/ability_altar/ability_altar.gd"
 const AFTERIMAGE_SCRIPT := "res://scenes/objects/afterimage_emitter/afterimage_emitter.gd"
+const PISTON_SCRIPT := "res://scenes/objects/piston_block/piston_block.gd"
 const SENSOR_SCRIPT := "res://scenes/objects/sensor_zone/sensor_zone.gd"
 const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
 const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
@@ -106,6 +111,8 @@ const BAND_CENTRE := -15.0
 
 var _failures: int = 0
 var _doors_checked: int = 0
+## 活塞是可选构件，所以这里只记账不设门槛：扫到几块报几块，一块没有也不算配置错误。
+var _pistons_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -160,7 +167,8 @@ func _initialize() -> void:
 				if level.get_node_or_null(NodePath(child_path)) == null:
 					_fail("missing node %s/%s" % [path, child_path])
 		_check_level_contract(level, path)
-		_check_door_triggers(level)
+		_doors_checked += _check_trigger_wiring(level, path, DOOR_SCRIPT, "门")
+		_pistons_checked += _check_trigger_wiring(level, path, PISTON_SCRIPT, "活塞")
 		_check_level_hazards(level, path)
 		_check_key_wiring(level, path)
 		level.free()
@@ -172,10 +180,11 @@ func _process(_delta: float) -> bool:
 	_verify_ready_geometry()
 	_verify_props()
 	_verify_afterimage()
+	_verify_piston()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
-	print("VERIFY DONE doors=%d failures=%d" % [_doors_checked, _failures])
+	print("VERIFY DONE doors=%d pistons=%d failures=%d" % [_doors_checked, _pistons_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -472,6 +481,69 @@ func _verify_afterimage_kill(emitter, bodies: Array) -> void:
 			% [str(band.position.y), str(cell.position.y)])
 
 
+## D49 活塞踏板。这一遍钉的全是"改了不响、要到试玩才露馅"那五件：
+## ① 脚本里根本不该出现 `_process`（这台机器上 process 是物理的 2.4 倍，照它走位等于伸出量
+##    随帧率抖，而且冻结那道闸根本拦不住 process）；② 碰撞层契约 —— 尤其是 mask 必须是 0，
+##    带上 terrain(1) 就正好撞上"收回态整块埋在墙里 = 起点重叠，`move_and_collide` 把整段位移
+##    原样退回"那条死路，活塞一辈子钻不出洞口；③ 原点=前缘这条摆放约定（`_resolve` 的让位
+##    算式少一项全靠它，横竖两轴各钉一次）；④ 改 travel_offset / block_size 后派生几何整组重算，
+##    斜行程只认主轴；⑤ 伸出量与跨度同源 —— `progress()` 读不到 1.0 就是两端算得不是一条式子。
+## 真物理下的行为（按住伸出、冻结停住、收回抽干落脚点、挤开与"背后有墙就推不动"）归
+## kit_selftest 第 13 组。
+func _verify_piston() -> void:
+	var path := PISTON_SCRIPT
+	var src := FileAccess.get_file_as_string(path)
+	if src.contains("func _process("):
+		_fail("PistonBlock 里出现了 _process：伸出量只能走物理通道（D49）")
+	var piston = _enter("res://scenes/objects/piston_block/piston_block.tscn")
+	var twin = _enter("res://scenes/objects/piston_block/piston_block.tscn")
+	var col: CollisionShape2D = piston.get_node("CollisionShape2D")
+	var col_twin: CollisionShape2D = twin.get_node("CollisionShape2D")
+	if piston.collision_layer != 4 or piston.collision_mask != 0:
+		_fail("PistonBlock layer=%d mask=%d（应 4/0：只被玩家读，绝不去探地形）"
+			% [piston.collision_layer, piston.collision_mask])
+	# 默认档 travel_offset=(64,0) / block_size=64² → 轴 +x、半长 32 → 身子整块在洞口内侧。
+	if col.shape.size != Vector2(64.0, 64.0) or col.position != Vector2(-32.0, 0.0):
+		_fail("收回态碰撞盒 %s @ %s（默认档应 64x64 @ (-32,0)）"
+			% [str(col.shape.size), str(col.position)])
+	var at := Vector2(100.0, 50.0)
+	var box: Rect2 = piston.rect_at(at)
+	if not is_equal_approx(box.end.x, at.x):
+		_fail("前缘不在节点原点上：右缘 %s vs 原点 %s（洞口约定是让位算式的地基）"
+			% [str(box.end.x), str(at.x)])
+	# 换成竖直行程：轴翻到 -y、半长仍按 block_size 那一维算，所以身子挪到原点下方。
+	piston.travel_offset = Vector2(0.0, -96.0)
+	if col.position != Vector2(0.0, 32.0):
+		_fail("改竖直行程后碰撞盒中心 %s（应 (0,32)：轴与半长没跟着重算）" % str(col.position))
+	var up: Rect2 = piston.rect_at(at)
+	if not is_equal_approx(up.position.y, at.y):
+		_fail("竖直行程的前缘不在原点上：上缘 %s vs 原点 %s" % [str(up.position.y), str(at.y)])
+	# 改边长：半长跟着变，碰撞盒中心必须跟着挪（原点约定的另一半住在这里）。
+	piston.block_size = Vector2(32.0, 32.0)
+	if col.position != Vector2(0.0, 16.0) or col.shape.size != Vector2(32.0, 32.0):
+		_fail("改 block_size 后没整组重算：%s @ %s（应 32x32 @ (0,16)）"
+			% [str(col.shape.size), str(col.position)])
+	# 同一场景里两块默认共用 .tscn 那份 sub_resource —— 谁都不改它时无害，所以判据写在"改之后"：
+	# _rebuild 一旦改成就地改尺寸，另一块会被一起拽小（门踩过这个坑，见 D21）。
+	if col_twin.shape.size != Vector2(64.0, 64.0):
+		_fail("改一块的 block_size 波及另一块：%s（应还是 64x64，两块共用了同一份形状资源）"
+			% str(col_twin.shape.size))
+	# 斜行程只认主轴：竖直那 30 px 被忽略，前缘仍落在原点那一侧。
+	piston.travel_offset = Vector2(48.0, 30.0)
+	if col.position != Vector2(-16.0, 0.0):
+		_fail("斜 travel_offset 没夹到主轴：碰撞盒中心 %s（应 (-16,0)）" % str(col.position))
+	# 满行程端点必须真读得出 1.0：progress() 是「位置÷跨度」，读不到就是两端不是一条式子。
+	piston.block_size = Vector2(64.0, 64.0)
+	piston.travel_offset = Vector2(0.0, -64.0)
+	piston.global_position = piston.get("_anchor") + Vector2(0.0, -64.0)
+	if not is_equal_approx(piston.progress(), 1.0):
+		_fail("满行程处 progress()=%s（应 1.0）" % str(piston.progress()))
+	root.remove_child(piston)
+	root.remove_child(twin)
+	piston.free()
+	twin.free()
+
+
 func _count_areas(node: Node) -> int:
 	var total := 0
 	for child in node.get_children():
@@ -740,25 +812,31 @@ func _count_by_script(node: Node, target: String) -> int:
 	return total
 
 
-## 关卡脚本不再持有门：门开不开只取决于场景里这条 trigger 路径。
+## trigger 接线（门 D21 / 活塞踏板 D49 共用）：构件不吃关卡脚本，只吃场景里这条路径。
 ## 所以漏配 / 配了个不发信号的节点，必须在无头守门里就炸出来，不能等试玩时"门怎么不开"。
+## 判据是信号名不是类型，与构件内部同一口径。
+## 与"一卡一门"那条**相反**：这里刻意允许多个构件指同一个触发源 —— 那正是"一组活塞"的写法，
+## 查重会把 D49 直接判死，所以这条扫描只查"接没接上"，不查"接了几家"。
 ## 刻意不走 get_node：实测未进树的实例里 `get_node("Objects/Door")` 这种两段路径会返回
 ## null（同层单段却正常），所以自己把 path→node 收成字典，用同一套拼法查。
-func _check_door_triggers(root: Node) -> void:
+func _check_trigger_wiring(root: Node, path: String, kit_script: String, label: String) -> int:
 	var by_path := {}
 	_collect_paths(root, "", by_path)
-	for path in by_path:
-		var script: Script = by_path[path].get_script()
-		if script == null or script.resource_path != DOOR_SCRIPT:
+	var checked := 0
+	for node_path in by_path:
+		var node: Node = by_path[node_path]
+		var script: Script = node.get_script()
+		if script == null or script.resource_path != kit_script:
 			continue
-		_doors_checked += 1
-		var target := _fold_rel_path(path, by_path[path].get("trigger"))
+		checked += 1
+		var target := _fold_rel_path(node_path, node.get("trigger"))
 		if target == "":
-			_fail("门 %s 的 trigger 是空的" % path)
+			_fail("%s %s 的 trigger 是空的" % [label, node_path])
 		elif not by_path.has(target):
-			_fail("门 %s 的 trigger 指向不存在的节点 %s" % [path, target])
+			_fail("%s %s 的 trigger 指向不存在的节点 %s" % [label, node_path, target])
 		elif not by_path[target].has_signal("pressed_changed"):
-			_fail("门 %s 的 trigger %s 不发 pressed_changed" % [path, target])
+			_fail("%s %s 的 trigger %s 不发 pressed_changed" % [label, node_path, target])
+	return checked
 
 
 func _collect_paths(node: Node, prefix: String, out: Dictionary) -> void:
