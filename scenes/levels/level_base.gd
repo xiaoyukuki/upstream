@@ -14,6 +14,9 @@ extends Node2D
 ##    run_state（此前游戏代码里没有任何地方写这个键，回灌是死路，只有守门脚本手写）；
 ##    存档点改为**全关卡只一台激活** —— 新台顶掉旧台（旧台回 idle 皮），它的身份（相对
 ##    本关卡根的 NodePath）与重生位一起进 run_state，于是重载后亮着的还是那一台。
+##    D54 加第三族传感器：彩蛋收集物（发 `collectible_taken` + 认 `mark_taken()`）。
+##    它与钥匙卡分道扬镳 —— 钥匙死了掉回去（D30 第 3 条），彩蛋拿过就永久空座：
+##    前者是机制素材、重来正是解谜的一部分，后者是对"发现"的收据。
 ##
 ## 第 3 条原来每关抄一遍：`level_01_tutorial.gd` 与 `level_template.gd` 各一份，实现还不一致
 ## （引导关写死 const、模板用导出项）。现在下沉到基类，新关只要按模板约定摆好
@@ -76,6 +79,7 @@ func _ready() -> void:
 	_bind_goal()
 	_bind_hazards()
 	_bind_checkpoints()
+	_bind_collectibles()
 
 
 ## 两段等待都走 _process 的真实 delta：它们判的是"玩家什么时候松手"，
@@ -111,7 +115,8 @@ func _set_player_start(pos: Vector2) -> void:
 	player.velocity = Vector2.ZERO
 
 
-## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子。
+## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子；
+## 彩蛋清单（D54）里那几只一律摆成空座。
 ## 能力不重播「静止即启」的演出 —— 那是第一次踩祭坛的事，复活的人早就拥有它了。
 func _apply_run_state() -> void:
 	var root := _world_root()
@@ -129,6 +134,12 @@ func _apply_run_state() -> void:
 		var altar: Node = _resolve(altar_path, &"ability_granted", "altar_path")
 		if altar != null and altar.has_method(&"mark_spent"):
 			altar.call(&"mark_spent")
+	# 彩蛋（D54 裁定②）：拿过的复生不了。逐个路径按 `mark_taken()` 摆成空座，
+	# 认不出这个方法的节点直接跳过 —— 名字撞车的非彩蛋节点不该被这条链碰到。
+	for path: NodePath in state.get("collectibles_taken", []):
+		var node: Node = get_node_or_null(path)
+		if node != null and node.has_method(&"mark_taken"):
+			node.call(&"mark_taken")
 
 
 func _apply_camera_limits() -> void:
@@ -188,9 +199,9 @@ func _bind_goal() -> void:
 	goal.connect(&"body_entered", _on_goal_body_entered)
 
 
-## 危险物与存档点不走 NodePath 接线：一关里它们是「摆几个就有几个」的消耗品，
-## 逐个拖引用摆图时漏接一个就是静默不死/静默不存。改按契约信号全子树扫描 ——
-## 与 D28 的目标一致：摆进场景树即生效，摆图的人不需要知道这里有代码契约。
+## 危险物、存档点与彩蛋收集物（D31 / D51 / D54）都不走 NodePath 接线：一关里它们是
+## 「摆几个就有几个」的东西，逐个拖引用摆图时漏接一个就是静默不死 / 静默不记。
+## 改按契约信号全子树扫描 —— 与 D28 的目标一致：摆进场景树即生效，摆图的人不需要知道这里有代码契约。
 func _bind_hazards() -> void:
 	for node: Node in _find_contract_nodes(&"touched_player"):
 		node.connect(&"touched_player", _on_hazard_touched)
@@ -204,6 +215,13 @@ func _bind_checkpoints() -> void:
 			push_warning("存档点 %s 发 checkpoint_reached 却没有 claim/release，本关会出现多台同亮"
 				% node.name)
 		node.connect(&"checkpoint_reached", _on_checkpoint_reached.bind(node))
+
+
+## 彩蛋收集物（D54 裁定②）：契约与存档点同族，但**不要求 claim/release** ——
+## "哪一只已被拿走"不存在全关卡唯一性，各记各的就对了，所以本构件只发信号 + `mark_taken()`。
+func _bind_collectibles() -> void:
+	for node: Node in _find_contract_nodes(&"collectible_taken"):
+		node.connect(&"collectible_taken", _on_collectible_taken.bind(node))
 
 
 func _find_contract_nodes(signal_name: StringName) -> Array[Node]:
@@ -325,6 +343,26 @@ func _relative_path(node: Node) -> NodePath:
 		names.push_front(cursor.name)
 		cursor = cursor.get_parent()
 	return NodePath("/".join(names))
+
+
+## 记的是**身份**而不是位置：彩蛋不会挪动，"拿没拿过"就是这一个布尔，所以清单里存路径。
+## 与钥匙卡刻意不同（D30 第 3 条：死了钥匙掉回去）—— 那是机制素材，死了重来正是解谜的一部分；
+## 彩蛋是对"发现"的收据，死一次就复生等于把已经拆开的礼物重新包好（D54 裁定②）。
+## 无常驻根（F6 直跑关卡场景）时不记，与存档点同一条分界：进度本来就没地方放。
+func _on_collectible_taken(source: Node) -> void:
+	var root := _world_root()
+	if root == null:
+		return
+	var state: Dictionary = root.call(&"get_run_state")
+	if not state.has("collectibles_taken"):
+		var fresh: Array[NodePath] = []
+		state["collectibles_taken"] = fresh
+	var taken: Array = state["collectibles_taken"]
+	var path := _relative_path(source)
+	if path in taken:
+		return
+	# 就地 append：Array 是引用类型，写回的仍是 run_state 里那一份带类型的清单。
+	taken.append(path)
 
 
 ## 常驻 World 根（main.tscn 的 Main，D31 的进度袋挂在它身上）。F6 直接跑关卡场景时

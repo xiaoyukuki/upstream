@@ -141,6 +141,26 @@
     "altar_core": [
       28,
       16
+    ],
+    "duck_front": [
+      12,
+      11
+    ],
+    "duck_side": [
+      12,
+      11
+    ],
+    "duck_back": [
+      12,
+      11
+    ],
+    "perch_idle": [
+      14,
+      5
+    ],
+    "perch_taken": [
+      14,
+      5
     ]
   }
 }

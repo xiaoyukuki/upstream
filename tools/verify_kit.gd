@@ -15,6 +15,7 @@ const SCRIPTS := [
 	"res://scenes/objects/key_pickup/key_pickup.gd",
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
+	"res://scenes/objects/collectible/collectible.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://components/time_receiver.gd",
@@ -42,6 +43,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/key_pickup/key_pickup.gd",
 	"res://scenes/objects/key_door/key_door.gd",
 	"res://scenes/objects/checkpoint/checkpoint.gd",
+	"res://scenes/objects/collectible/collectible.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://components/hazard_base.gd",
@@ -63,6 +65,7 @@ const SCENES := [
 	"res://scenes/objects/key_pickup/key_pickup.tscn",
 	"res://scenes/objects/key_door/key_door.tscn",
 	"res://scenes/objects/checkpoint/checkpoint.tscn",
+	"res://scenes/objects/collectible/collectible.tscn",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
 	"res://scenes/objects/fall_zone/fall_zone.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
@@ -81,6 +84,7 @@ const EXPORTS := {
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
 	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
 	"res://scenes/objects/key_door/key_door.gd": ["height", "width", "sensor_reach", "sensor_height", "key", "swipe_time"],
+	"res://scenes/objects/collectible/collectible.gd": ["skin", "spin_period"],
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
@@ -109,6 +113,7 @@ const SENSOR_SCRIPT := "res://scenes/objects/sensor_zone/sensor_zone.gd"
 const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
 const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
 const FALLZONE_SCRIPT := "res://scenes/objects/fall_zone/fall_zone.gd"
+const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
 
@@ -188,6 +193,7 @@ func _initialize() -> void:
 func _process(_delta: float) -> bool:
 	_verify_ready_geometry()
 	_verify_props()
+	_verify_collectible()
 	_verify_afterimage()
 	_verify_piston()
 	_verify_fall_zone()
@@ -745,6 +751,98 @@ func _verify_props() -> void:
 		var lamp := saved.get_pixel(21, 2)
 		if not (lamp.b > 0.8 and lamp.g > 0.8):
 			_fail("terminal_saved 顶灯不亮，已存态读不出多出来那一档: %s" % str(lamp))
+
+
+## D54 彩蛋收集物（小黄鸭转台）。静态这一遍钉五件事，全属"改了不响、要到试玩才露馅"那类：
+## ① 契约三件套在场（发 `collectible_taken` + 认 `mark_taken()`）—— 改名会让 LevelBase
+##    的全子树扫描静默捞不到它，彩蛋变成"拿了不记、死一次复生"，而且一声不吭；
+## ② 转角只能走门控 delta：脚本里不许出现 `_process`，且必须真的读 `_receiver.get_physics_delta()`
+##    —— 这条就是用户批的"冻结时也暂停"，写成源码形状的检查比跑一帧更便宜也不会漏；
+## ③ 拾取带 == 贴图外接框外扩 `PICKUP_MARGIN`，尺寸**从零件纹理现算**，不在断言里抄第二份数。
+##    带子的期望值里没有姿态这一项，正是裁定③"转扁了也不许捡不到"的那声响；
+## ④ 三视图同尺寸、且五张零件都在 props.json 清单上（构件私自 preload 一张没登记的图 = 换风格时没人提醒）；
+## ⑤ 像素契约：空座顶面那道压痕必须比座面暗（否则"拿走了"读不出来，D54 裁定⑤全靠它）、
+##    正脸与背面不能是同一张图（否则"转过去了"读不出来）、每只视图底边必须有像素（否则鸭子悬在座子上方）、
+##    本体必须是琥珀那一档（D29：可拾取 = 琥珀；青是"光与电/能力"，染青就成了一次能力演出）。
+func _verify_collectible() -> void:
+	var src := FileAccess.get_file_as_string(COLLECTIBLE_SCRIPT)
+	if src.contains("func _process("):
+		_fail("Collectible 里出现了 _process：转角只能走门控 delta，照帧率走会变成冻结里它还在转（D54）")
+	if not src.contains("_receiver.get_physics_delta()"):
+		_fail("Collectible 没读 _receiver.get_physics_delta()：那只鸭子不跟世界一起停（D54）")
+	var f := FileAccess.open("res://assets/props/props.json", FileAccess.READ)
+	if f == null:
+		_fail("props.json 不在，彩蛋的零件同源无从核对")
+		return
+	var parts: Dictionary = (JSON.parse_string(f.get_as_text()) as Dictionary)["parts"]
+
+	var cs: Dictionary = (load(COLLECTIBLE_SCRIPT) as GDScript).get_script_constant_map()
+	var margin: float = cs["PICKUP_MARGIN"]
+	var view_names := ["duck_front", "duck_side", "duck_back"]
+	var views: Array[Image] = []
+	for i in view_names.size():
+		var tex: Texture2D = cs["TEX_%s" % view_names[i].to_upper()]
+		if tex == null or tex.resource_path != "res://assets/props/%s.png" % view_names[i]:
+			_fail("Collectible 的 TEX_%s 常量不指向 %s.png" % [view_names[i].to_upper(), view_names[i]])
+			continue
+		if not parts.has(view_names[i]):
+			_fail("%s 不在 props.json 清单上（换风格时没人会提醒你它存在）" % view_names[i])
+		var img := _img(view_names[i])
+		if img == null:
+			return
+		views.append(img)
+	if views.size() != view_names.size():
+		return
+	for v in range(1, views.size()):
+		if views[v].get_size() != views[0].get_size():
+			_fail("三视图尺寸不一致（%s vs %s）：换视图那一帧鸭子会在底座上跳"
+				% [str(views[0].get_size()), str(views[v].get_size())])
+	var front: Image = views[0]
+	var back: Image = views[2]
+	if _bits(front) == _bits(back):
+		_fail("duck_front 与 duck_back 是同一张图：转到背面去读不出「转过去了」")
+	for img in views:
+		var feet := 0
+		for x in img.get_width():
+			if img.get_pixel(x, img.get_height() - 1).a > 0.5:
+				feet += 1
+		if feet == 0:
+			_fail("有张鸭视图的底边一个像素都没有：它会悬在底座上方，读不出「坐在上面」")
+	# 正脸身体那一档（选型时量过的落盘点）：琥珀 = 可拾取（D29）。
+	var body := front.get_pixel(0, 7)
+	if not (body.r > 0.9 and body.g > 0.6 and body.g < 0.85 and body.b < 0.4):
+		_fail("duck_front 本体不是琥珀那一档: %s" % str(body))
+
+	var idle := _img("perch_idle")
+	var taken := _img("perch_taken")
+	if idle == null or taken == null:
+		return
+	if _bits(taken) == _bits(idle):
+		_fail("perch_taken 与 perch_idle 一模一样：拿走了没有收据（D54 裁定⑤ 留空座）")
+	if _lum(taken, 6, 1) >= _lum(idle, 6, 1):
+		_fail("空座顶面那道压痕不比座面亮行暗：留空座读不出「这里有过一只」")
+
+	var col = _enter("res://scenes/objects/collectible/collectible.tscn")
+	_check_area_layers(col, "Collectible", 8)
+	if not col.has_signal("collectible_taken") or not col.has_method("mark_taken"):
+		_fail("Collectible 缺 collectible_taken 或 mark_taken，LevelBase 的粘性清单接不上（D54）")
+	var shape: CollisionShape2D = col.get_node("CollisionShape2D")
+	var sprite_h := float(front.get_height() + idle.get_height())
+	var want := Vector2(float(idle.get_width()) + margin * 2.0, sprite_h + margin * 2.0)
+	if shape.shape.size != want:
+		_fail("Collectible 拾取带 %s（应 = 外接框 + 边距 %s = %s）"
+			% [str(shape.shape.size), str(margin), str(want)])
+	if shape.position != Vector2(0.0, -sprite_h * 0.5):
+		_fail("Collectible 拾取带心 %s（应贴着外接框中心 (0,%s)，与原点的底边中心约定同一套）"
+			% [str(shape.position), str(-sprite_h * 0.5)])
+	root.remove_child(col)
+	col.free()
+
+
+## 逐位比两张零件是不是同一张图。`get_data_for_mip()` 在 4.6 的 Image 上没有，
+## 编码成 PNG 字节再比既准又不用自己写双层循环。
+func _bits(img: Image) -> PackedByteArray:
+	return img.save_png_to_buffer()
 
 
 func _img(pname: String) -> Image:

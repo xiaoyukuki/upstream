@@ -36,6 +36,12 @@ extends Node
 ##     它是只读旁路 —— 不锁移动、不消耗卡、幕一格不塌；有卡则直接进闩锁链，红色不许插队；
 ##     脉冲全程在世界冻结里跑得完（接成世界 delta 就永远红着）；尸体不触发；时长只有
 ##     `denied_time` 一个来源；闩了之后不再闪。
+## 17) 彩蛋收集物（D54）：转的时钟只吃门控 delta（冻结即钉在当前角度），而捡起那一下与
+##     飘起演出吃的是**原始** delta —— 冻着照样捡得到、捡了不会卡在半空。判定带不随姿态
+##     缩（转扁的那一瞬间它不许变成捡不到的东西）；一圈换皮 4 次的序列与最扁那档 0.707
+##     对着选型图核对 —— GDScript 与 Python 那份是同一道算式的两处书写，只改一边必须当场响。
+##     本条命只发一次信号；回灌走 mark_taken（空座、不重播演出、不再发），且 run_state 记的
+##     是身份（相对关卡根的 NodePath）而不是位置 —— 换关后鸭子挪了格子也还得是空的。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -226,6 +232,7 @@ func _ready() -> void:
 	await _test_sticky_progress()
 	await _test_fall_zone()
 	await _test_gate_denial()
+	await _test_collectible()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1252,6 +1259,183 @@ func _count_denial_edges(gate: KeyDoor, frames: int) -> int:
 			edges += 1
 		was = now
 	return edges
+
+
+## 第 17 组：彩蛋收集物（D54）。钉的全是"这只鸭子转得不像批过的那张图"和"死一次不许复生"
+## 两条最容易静默弄死的通路：
+## ① 转只吃门控 delta —— 冻结即钉在当前角度上；
+## ② 判定带不随姿态缩、且尺寸只有一个来源（外接框 + `PICKUP_MARGIN`，期望值从零件纹理现算）；
+## ③ 冻着也捡得到、飘起那半秒在冻结里自己走完 —— 两条时钟通道**刻意**不同，接错一根的两种
+##    露馅样子分别是"按着方向键就捡不到"和"捡了卡在半空不淡掉"；
+## ④ 一圈换皮 4 次的序列、最扁 0.707、镜像只在下半圈的侧脸：Python 选型图那道算式的另一处
+##    书写，只改一边必须在这里响，而不是等玩家看出鸭子转得跟批过的不一样；
+## ⑤ 本条命只发一次信号；`mark_taken()` 是"结果"不是"再演一遍"；生产链里 sticky 的是
+##    **身份**（相对关卡根的 NodePath）而不是位置 —— 换关后鸭子挪了格子也还得是空的。
+func _test_collectible() -> void:
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	var rig := Node2D.new()
+	rig.name = "DuckRig"
+	add_child(rig)
+	# fixture 摆在 x 11000 之外：前面几组的地面最远到 9600+800，鸭子不该站在别人的地上。
+	var ground := _solid_box(Vector2(11600.0, 40.0), Vector2(1600.0, 80.0))
+	var duck := load("res://scenes/objects/collectible/collectible.tscn") \
+		.instantiate() as Collectible
+	duck.name = "Duck"
+	duck.position = Vector2(11200.0, 0.0)
+	rig.add_child(duck)
+	await _frame(6)
+	_check("世界流动时鸭子在转", duck.spin_angle() > 0.0)
+
+	# —— ② 判定带与零件尺寸无关（D38 那条口径在转台上再验一次）——
+	var col: CollisionShape2D = duck.get_node("CollisionShape2D")
+	var band_size: Vector2 = col.shape.size
+	var band_center: Vector2 = col.position
+	await _frame(60) # 3 s 的行程走了大半圈：正脸 → 挤扁的侧脸 → 背面
+	_check("转的过程中带子一格没缩（转扁那一瞬不许变成捡不到的东西）",
+		col.shape.size == band_size and col.position == band_center)
+	var sprite_h := float(Collectible.TEX_DUCK_FRONT.get_height() + Collectible.TEX_PERCH_IDLE.get_height())
+	var margin := float(Collectible.PICKUP_MARGIN)
+	var want_size := Vector2(float(Collectible.TEX_PERCH_IDLE.get_width()) + margin * 2.0,
+		sprite_h + margin * 2.0)
+	_check("带子 = 底座宽 x (鸭+座) 高各外扩 PICKUP_MARGIN（%s）" % str(want_size),
+		band_size == want_size)
+	_check("带心在外接框中心、下沿只探出地面 4 px（裁定③ 订正：不是脚底那条带，也不钻到地板下）",
+		absf(band_center.y + sprite_h * 0.5) < 0.01
+		and absf((band_center.y + band_size.y * 0.5) - margin) < 0.01)
+
+	# —— ① + ③ 冻着：角度钉住，但捡得起、飘得完 ——
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var frozen_angle: float = duck.spin_angle()
+	var hits: Array = []
+	duck.collectible_taken.connect(func() -> void: hits.append(1))
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	hero.position = Vector2(11140.0, -Player.COLLISION_HALF_HEIGHT)
+	rig.add_child(hero)
+	await _frame(3)
+	_check("开场：世界冻着、人在带外，一个信号都没有",
+		hits.is_empty() and TimeManager.is_time_frozen())
+	hero.position = Vector2(11200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(4)
+	_check("冻着走进带里照样捡到手（判据不吃世界 delta，D38 第 4 条同口径）",
+		hits.size() == 1 and duck.is_spent())
+	var guard := 0
+	while duck.fly_progress() >= 0.0 and guard < 60:
+		guard += 1
+		await get_tree().physics_frame
+	_check("飘起演出在冻结里自己走完了（第 %d 拍收）" % guard, duck.fly_progress() < 0.0)
+	_check("整段冻结里角度一分一毫没动（%.4f vs %.4f）" % [frozen_angle, duck.spin_angle()],
+		duck.spin_angle() == frozen_angle)
+
+	# —— ⑤a 本条命只发一次：出去再进来不许复生 ——
+	hero.position = Vector2(11140.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	hero.position = Vector2(11200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(8)
+	_check("离开再进来不再发第二次（spent 闩锁，重置只属于关卡重载）", hits.size() == 1)
+	_check("再踩空座不重播飘起演出", duck.fly_progress() < 0.0)
+	TimeManager.notify_movement_intent(false)
+	await _frame(20)
+	_check("解冻后鸭子从钉住处接着转（角度重新推进）", duck.spin_angle() != frozen_angle)
+
+	# —— ⑤b 回灌那一头：mark_taken 直接空座，不重播、不发信号 ——
+	var ghost := load("res://scenes/objects/collectible/collectible.tscn") \
+		.instantiate() as Collectible
+	ghost.name = "Ghost"
+	ghost.position = Vector2(11400.0, 0.0)
+	rig.add_child(ghost)
+	await _frame(2)
+	var ghost_hits: Array = []
+	ghost.collectible_taken.connect(func() -> void: ghost_hits.append(1))
+	ghost.mark_taken()
+	await _frame(2)
+	_check("mark_taken 即空座：spent 置真、不重播演出、不发信号",
+		ghost.is_spent() and ghost.fly_progress() < 0.0 and ghost_hits.is_empty())
+	hero.position = Vector2(11400.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(6)
+	_check("走过这只已回灌的空座也拿不到第二次", ghost_hits.is_empty())
+
+	# —— ④ 转台 B 档那道算式（对着 preview_duck_spin.png 核对，像素本身归 verify_kit）——
+	var samples := 360
+	var seq: Array[int] = []
+	var min_f := 2.0
+	var max_f := -2.0
+	var mirrored_upper := 0
+	for i in samples:
+		var theta := float(i) * TAU / float(samples)
+		var v := Collectible.pick_view(theta)
+		if seq.is_empty() or seq.back() != v:
+			seq.append(v)
+		var f := Collectible.pick_factor(theta)
+		min_f = minf(min_f, f)
+		max_f = maxf(max_f, f)
+		if Collectible.pick_mirror(theta) and theta < PI:
+			mirrored_upper += 1
+	_check("一圈换皮 4 次、顺序正脸→侧脸→背面→侧脸", seq == [0, 1, 2, 1, 0])
+	_check("四个轴向各对准一张皮（0/90/180/270 度 = 正/侧/背/侧）",
+		[Collectible.pick_view(0.0), Collectible.pick_view(PI * 0.5),
+			Collectible.pick_view(PI), Collectible.pick_view(PI * 1.5)] == [0, 1, 2, 1])
+	_check("最扁 0.707（±45° 那档，用户批 B 档时看到的数字：%.4f）" % min_f,
+		min_f >= 0.70 and min_f < 0.71)
+	_check("对准轴心时一点都不挤（max=%s）" % str(snappedf(max_f, 0.001)),
+		absf(max_f - 1.0) < 0.001)
+	_check("镜像只在下半圈的侧脸（少这一句鸭子会倒着游）",
+		mirrored_upper == 0 and Collectible.pick_mirror(PI * 1.5)
+		and not Collectible.pick_mirror(PI))
+
+	hero.queue_free()
+	rig.queue_free()
+	await _frame(3)
+	var strays := get_tree().get_nodes_in_group(&"player")
+	_check("进生产链之前场上清空（%d 个残留玩家）" % strays.size(), strays.is_empty())
+
+	# —— ⑤c 生产链：踩一次即写进常驻根，换关后按路径回灌成空座 ——
+	var root = _make_world_root()
+	var level := load("res://scenes/levels/level_base.gd").new() as LevelBase
+	level.start_with_ability = true
+	var duck_a := load("res://scenes/objects/collectible/collectible.tscn") \
+		.instantiate() as Collectible
+	duck_a.name = "Duck"
+	duck_a.position = Vector2(11200.0, 0.0)
+	level.add_child(duck_a)
+	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker.position = Vector2(11100.0, -Player.COLLISION_HALF_HEIGHT)
+	level.add_child(walker)
+	add_child(level)
+	await _frame(3)
+	walker.position = Vector2(11200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(4)
+	var logged: Array = root.run_state.get("collectibles_taken", [])
+	_check("游戏代码真的把它记进了 run_state（不是守门替它写）", logged.size() == 1)
+	_check("记的是相对关卡根的身份，不是位置", logged[0] == NodePath("Duck"))
+	level.queue_free()
+	await _frame(3)
+	# 新实例：这只鸭子摆在**另一格**上 —— 认路径不认位置，它照样必须是空的。
+	var level2 := load("res://scenes/levels/level_base.gd").new() as LevelBase
+	level2.start_with_ability = true
+	var duck_b := load("res://scenes/objects/collectible/collectible.tscn") \
+		.instantiate() as Collectible
+	duck_b.name = "Duck"
+	duck_b.position = Vector2(11500.0, 0.0)
+	level2.add_child(duck_b)
+	var walker2 := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker2.position = Vector2(11400.0, -Player.COLLISION_HALF_HEIGHT)
+	level2.add_child(walker2)
+	add_child(level2)
+	await _frame(3)
+	var reborn_hits: Array = []
+	duck_b.collectible_taken.connect(func() -> void: reborn_hits.append(1))
+	_check("新关卡实例里那只已按 run_state 回灌成空座（挪了格子也认得它）", duck_b.is_spent())
+	walker2.position = Vector2(11500.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(6)
+	_check("复生之后走过它拿不到（死一次不许复生），清单也不叠一条",
+		reborn_hits.is_empty() and logged.size() == 1)
+	level2.queue_free()
+	root.queue_free()
+	ground.queue_free()
+	TimeManager.reset_state()
+	await _frame(2)
 
 
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒

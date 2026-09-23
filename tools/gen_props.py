@@ -983,6 +983,10 @@ def emit_parts():
     for fname, img in make_altar_parts(g).items():
         img.save(os.path.join(out_dir, fname + ".png"))
         manifest["parts"][fname] = [img.width, img.height]
+    # D54：彩蛋收集物（小黄鸭三视图 + 底座两态），同样走 g。
+    for fname, img in make_collectible_parts(g).items():
+        img.save(os.path.join(out_dir, fname + ".png"))
+        manifest["parts"][fname] = [img.width, img.height]
     with open(os.path.join(out_dir, "props.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
     print("emitted %d parts + props.json to %s" % (len(manifest["parts"]), out_dir))
@@ -1279,6 +1283,113 @@ def altar_sheet():
     out = os.path.join(out_dir, "preview_altar.png")
     canvas.save(out)
     print("saved", out, canvas.size)
+
+
+# ---------------------------------------------------------------- 彩蛋收集物（D54）
+# 用户在两张选型图（tools/gen_collectible_preview.py 的皮、gen_collectible_spin_preview.py
+# 的转台档位）上批了：**小黄鸭 + B 档三视图挤压换视图 + 拿走了留空座**。
+# 和 M5 / 祭坛同一套纪律（D34）：下面这几个函数就是那两张图里跑过的**同一个调用**，
+# 逐字搬过来，不许"重新画一遍长得像的"—— 落盘像素必须和他批的那张逐位相同。
+# `--emit` 会校验两个预览脚本重跑后输出 md5 不变（人工做，见 D54）。
+#
+# 三视图而不是两张：B 档的算式是"最近轴 + |cos(与轴心夹角)| 横向挤压"，四轴向里
+# front/back 对称、side 靠镜像，所以真正需要的原画只有正/侧/背三张。三张**必须同尺寸**
+# （12x11）—— 换视图时盒子一缩，鸭子会在底座上跳上跳下。
+# 配色全从 g 调色板推导（主体 accent2 = 琥珀那档，D29 的"可拾取"），没有字面色，
+# 所以 props.json 只登记尺寸、不登记颜色。撞色（对能量卡 cr=1.14）是用户看过数字后
+# 明确接受的（"撞色问题不大"）—— 记在这儿，别下次看到又当新问题重提。
+
+DUCK_W = 12
+DUCK_H = 11
+PERCH_W = 14
+PERCH_H = 5
+
+
+def _cv(w, h):
+    return Image.new("RGBA", (w, h), (0, 0, 0, 0))
+
+
+def part_duck_front(p):
+    """正脸 12x11：两只眼 + 居中的喙。玩家认得出来的那一面。"""
+    img = _cv(DUCK_W, DUCK_H)
+    d = ImageDraw.Draw(img)
+    a = p["accent2"]
+    d.ellipse([0, 4, 11, 10], fill=a)
+    d.ellipse([2, 0, 9, 6], fill=G.lighter(a, 0.18))
+    d.rectangle([3, 2, 3, 3], fill=p["edge"])
+    d.rectangle([8, 2, 8, 3], fill=p["edge"])
+    d.rectangle([5, 3, 6, 4], fill=G.darker(a, 0.42))
+    d.rectangle([2, 7, 9, 8], fill=G.darker(a, 0.20))
+    return _rim(img, p)
+
+
+def part_duck_side(p):
+    """侧脸 12x11：喙朝右、尾在左、只留一只眼、身上一块翅。"""
+    img = _cv(DUCK_W, DUCK_H)
+    d = ImageDraw.Draw(img)
+    a = p["accent2"]
+    d.ellipse([1, 4, 11, 10], fill=a)
+    d.ellipse([4, 0, 10, 6], fill=G.lighter(a, 0.18))
+    d.rectangle([10, 2, 11, 3], fill=G.darker(a, 0.42))
+    d.rectangle([7, 1, 8, 2], fill=p["edge"])
+    d.rectangle([0, 3, 2, 6], fill=a)
+    d.rectangle([3, 6, 7, 8], fill=G.darker(a, 0.22))
+    return _rim(img, p)
+
+
+def part_duck_back(p):
+    """背面 12x11：没有脸 —— 两簇尾羽 + 一道背缝。这条读不读得出来是"转过去了"。"""
+    img = _cv(DUCK_W, DUCK_H)
+    d = ImageDraw.Draw(img)
+    a = p["accent2"]
+    d.ellipse([0, 4, 11, 10], fill=G.darker(a, 0.10))
+    d.ellipse([2, 0, 9, 6], fill=a)
+    d.rectangle([5, 0, 6, 9], fill=G.darker(a, 0.30))
+    d.rectangle([2, 8, 4, 10], fill=G.lighter(a, 0.24))
+    d.rectangle([7, 8, 9, 10], fill=G.lighter(a, 0.24))
+    return _rim(img, p)
+
+
+def part_perch(p, taken, dim=False):
+    """公共底座 14x5：所有候选共用同一只，选型时比的是"上面那只"而不是座子。
+    taken=True 时顶面多一道压痕（比座子更暗的一档）—— 这就是"拿走了"的收据（D54 裁定⑤）。
+    dim=True 是收据的**加强档**：连顶面那条亮线一起灭掉。选型时放进来是因为留痕那条读数
+    实测只有"整只消失"的四到六成（座子占 footprint 两成像素、两态一字不差），用户取了
+    默认档，所以落盘走 dim=False —— 旋钮留着是给下次换主意的人，不是废码。"""
+    img = _cv(PERCH_W, PERCH_H)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 13, 4], fill=p["deep"])
+    d.rectangle([0, 0, 13, 4], outline=p["lip"] if not dim else G.darker(p["lip"], 0.62))
+    d.rectangle([0, 0, 13, 0], fill=p["edge"] if dim else G.lighter(p["metal"], 0.16))
+    d.rectangle([0, 4, 13, 4], fill=p["edge"])
+    if taken:
+        d.rectangle([2, 1, 11, 2], fill=G.mix(p["screen"], p["deep"], 0.35))
+        d.rectangle([2, 1, 11, 1], fill=p["screen"])
+    return img
+
+
+def duck_perched(p, view, taken, dim=False):
+    """零件坐在底座上：宽对齐 14、水平居中、鸭子底边贴底座顶边。
+    两态共用同一个盒子尺寸（`taken` 只决定顶不顶那只、座子上有没有压痕），
+    否则"留痕"那条 cr 的分母会跟着盒子大小一起漂。选型图与构件都走这一份算式。
+    `dim` 是底座那个收据加强档的旋钮，构件不用它（落盘走默认档），选型图要它才能画出对照。"""
+    img = _cv(PERCH_W, view.height + PERCH_H)
+    if not taken:
+        img.paste(view, ((PERCH_W - view.width) // 2, 0), view)
+    sock = part_perch(p, taken, dim)
+    img.paste(sock, (0, view.height), sock)
+    return img
+
+
+def make_collectible_parts(p):
+    """D54 落盘五张：三视图 + 底座两态。构件按角度换前三种、按 spent 换后两种。"""
+    return {
+        "duck_front": part_duck_front(p),
+        "duck_side": part_duck_side(p),
+        "duck_back": part_duck_back(p),
+        "perch_idle": part_perch(p, False),
+        "perch_taken": part_perch(p, True),
+    }
 
 
 def main():

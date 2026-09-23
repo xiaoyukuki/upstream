@@ -22,12 +22,16 @@ var _current_scene: PackedScene
 var _current_level: Node
 
 ## 跨重载的粘性进度（D31）：关卡场景每死一次就整个换掉，本条命攒下的进度只能住在这个
-## 常驻根上，LevelBase 在 _ready() 里回灌。只存三个键，语义由 LevelBase 定义：
+## 常驻根上，LevelBase 在 _ready() 里回灌。只存四个键，语义由 LevelBase 定义：
 ## - respawn_position: Vector2 —— 最近存档点；没有则从 PlayerSpawn 开局。
 ## - respawn_marker: NodePath —— 那个存档点相对关卡根的路径（D51）。位置只说"回哪儿"，
 ##   这个键说"是哪一台"：新实例里按它把那一台点亮，否则重生位对了、皮却全灭。
 ## - altar_spent: bool —— 祭坛已耗。既决定祭坛重载后的样子，也推导能力是否开启
 ##   （D31 订正：不另存 ability_granted，两个布尔各自漂移就是软锁）。
+## - collectibles_taken: Array[NodePath] —— 这一关里已经被拿走的彩蛋（D54）。存身份不存
+##   位置：彩蛋不挪窝，"拿没拿过"就是这一个事实；死一次不许复生是用户裁定，
+##   而主动重开（R / 终点）走上面的 run_state.clear()，彩蛋因此复位 —— 那条路是"重开这一关"，
+##   不是"重活一次"。
 var run_state: Dictionary = {}
 
 @onready var _level_container: Node2D = $LevelContainer
