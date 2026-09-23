@@ -8,7 +8,7 @@ extends SceneTree
 ## 结构（D24）：
 ##   source 0 = tilesheet_terrain.png，16 个单格瓦片，每格一块整格碰撞多边形，
 ##              并挂到 terrain set 0（TERRAIN_MODE_MATCH_SIDES）做四侧自动拼贴；
-##   source 1 = tilesheet_decor.png，装饰整份清单（含 wall_fill / shade、两块无字告示牌 D56），无碰撞。
+##   source 1 = tilesheet_decor.png，整份装饰清单（含 wall_fill / shade 与两块无字告示牌），无碰撞。
 ## 物理层 0：collision_layer=1（terrain）、mask=0 —— 和 platform.tscn 同一层。
 ##
 ## 用法（PNG 必须先被导入，否则 load() 拿不到纹理）：
