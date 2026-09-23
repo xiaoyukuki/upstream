@@ -169,6 +169,9 @@ DECOR = {
     "pipe_v":        (192, 64, 16, 96),
     "light":         (0, 112, 96, 16),
     "pipe_h":        (96, 112, 64, 16),
+    # D56 两块无字告示牌。占格必须等于 SIGN_SIZE（16 对齐、整格倍数），选型图与图集同源。
+    "sign_card":      (0, 160, 16, 16),
+    "sign_card_arrow": (16, 160, 32, 16),
 }
 DECOR_SIZE = (256, 256)
 
@@ -525,6 +528,56 @@ def decor_led_panel(d, p, x, y, w, h):
     d.rectangle([x + 4, y + 20, x + w - 5, y + 22], fill=darker(body, 0.40))
 
 
+# ---------------------------------------------------------- 无字告示牌（D56）
+
+#: kind -> 这块牌占的格数（世界像素）。DECOR 里那两个矩形必须与之一致。
+SIGN_SIZE = {"card": (16, 16), "arrow": (32, 16)}
+
+
+def sign_plate(d, p, x, y, kind):
+    """一块夜光标牌：暗钢体 + 一圈亮边 + 近黑的屏 + 屏上那个图形。返回 (screen, glyph) 两块闭区间。
+    **画法只这一份** —— 装饰图集与选型图 `tools/gen_sign_preview.py` 吃的是同一个函数，
+    出货的皮与定案时看见的那张皮逐字节相同（D25/D26 那条老坑：预览与落盘两套画法必然走偏）。
+
+    屏为什么要近黑、边为什么要亮：夜光风格（g）里牌体 `deep` 对墙只有 1.11 —— 整块钢在暗墙上是
+    隐形的，能把牌从墙里拎出来的只有那圈 `lip`（选型图 A4/A5 行实测，与 D55 那只座子 cr=1.04 同源）。
+    所以这两块牌进 DECOR_NO_ROUND：soft 那圈贴纸暗框画在格子边界上，正好盖掉唯一可见的亮边。
+
+    kind="card"  实心琥珀卡（16x16 一格）= 「这扇门要的是这个」：门前就地说明。
+    kind="arrow" 琥珀卡 + 亮白右箭头（32x16 两格）= 「往那边走，那里有一张」：走廊指路。
+    方向与物件**分色**是定案要点：琥珀自 D29 起专指可拾取，白只说「往这边走」—— 于是白箭头
+    不会被读成第二只卡，卡也不会被读成那颗 LED。TileMapLayer 不能逐格翻转，要左向就再出一格。
+    """
+    w, h = SIGN_SIZE[kind]
+    d.rectangle([x, y, x + w - 1, y + h - 1], fill=p["deep"])
+    d.rectangle([x, y, x + w - 1, y + h - 1], outline=p["lip"])
+    d.rectangle([x, y, x + w - 1, y], fill=lighter(p["metal"], 0.20))
+    d.rectangle([x, y + h - 1, x + w - 1, y + h - 1], fill=darker(p["metal"], 0.45))
+    sx0, sy0, sx1, sy1 = x + 2, y + 3, x + w - 3, y + h - 3
+    d.rectangle([sx0, sy0, sx1, sy1], fill=p["screen"])
+    d.rectangle([sx0, sy0, sx1, sy1], outline=darker(p["lip"], 0.62))
+    a = p["accent2"]
+    if kind == "card":                                  # 落盘那只 14x10 的剪影压扁进屏里
+        cw, ch = 10, 7
+        cx = sx0 + ((sx1 - sx0 + 1) - cw) // 2
+        cy = sy0 + ((sy1 - sy0 + 1) - ch) // 2
+    else:                                               # 卡靠左、箭头靠右：一句话的两个半
+        cx, cy = sx0 + 1, sy0 + ((sy1 - sy0 + 1) - 7) // 2
+    d.rectangle([cx, cy, cx + 9, cy + 6], fill=a)
+    d.rectangle([cx, cy, cx + 9, cy], fill=lighter(a, 0.44))
+    d.rectangle([cx, cy + 4, cx + 9, cy + 5], fill=darker(a, 0.52))
+    d.rectangle([cx + 1, cy + 1, cx + 2, cy + 2], fill=p["accent"])
+    if kind == "card":
+        glyph = (cx, cy, cx + 9, cy + 6)
+    else:
+        ax, ymid = sx1 - 7, (sy0 + sy1) // 2
+        for bx, lo, hi in ((ax, -1, 1), (ax + 1, -1, 1), (ax + 2, -1, 1), (ax + 3, -1, 1),
+                           (ax + 4, -3, 3), (ax + 5, -2, 2), (ax + 6, -1, 1)):
+            d.rectangle([bx, ymid + lo, bx, ymid + hi], fill=p["lip"])
+        glyph = (cx, min(cy, ymid - 3), cx + 9, max(cy + 6, ymid + 3))
+    return (sx0, sy0, sx1, sy1), glyph
+
+
 PAINTERS = {
     "light": lambda d, p, x, y: decor_light(d, p, x, y),
     "pipe_h": lambda d, p, x, y: decor_pipe_h(d, p, x, y),
@@ -536,10 +589,14 @@ PAINTERS = {
     "cabinet": lambda d, p, x, y: decor_cabinet(d, p, x, y, 64, 48),
     "cabinet_small": lambda d, p, x, y: decor_cabinet(d, p, x, y, 48, 32),
     "hazard": lambda d, p, x, y: decor_hazard(d, p, x, y, 32, 16),
+    "sign_card": lambda d, p, x, y: sign_plate(d, p, x, y, "card"),
+    "sign_card_arrow": lambda d, p, x, y: sign_plate(d, p, x, y, "arrow"),
 }
 
 # 会重复平铺的必须跳过：擦角等于在每一格接缝处啃掉一个豁口，管子会一段段断开。
-DECOR_NO_ROUND = {"wall_fill", "shade", "pipe_h", "pipe_v"}
+# 两块告示牌也在这张名单里，理由相反但同一条规矩管得住：soft 那圈暗框是沿着格子边界画的，
+# 而牌体对墙只有 1.11 —— 唯一能把它从暗墙里拎出来的是自己那圈亮边，暗框正好盖在亮边上。
+DECOR_NO_ROUND = {"wall_fill", "shade", "pipe_h", "pipe_v", "sign_card", "sign_card_arrow"}
 CHAMFER = {2: (1,), 3: (2, 1), 4: (3, 2, 1)}   # 第 k 行往角外擦掉的像素数
 
 
@@ -560,6 +617,12 @@ def build_decor_atlas(p):
     for name, fn in PAINTERS.items():
         rx, ry, _, _ = DECOR[name]
         fn(d, p, rx, ry)
+    for kind, name in (("card", "sign_card"), ("arrow", "sign_card_arrow")):
+        if DECOR[name][2:] != SIGN_SIZE[kind]:
+            # 画法只画自己那一档的尺寸：DECOR 写宽了不会报错，只会让牌渗进邻格、
+            # 与邻格的透明角叠在一起，图集里看不出来、刷进关卡才现形。
+            raise SystemExit("DECOR[%s] 与 SIGN_SIZE[%s] 不一致：%s vs %s"
+                             % (name, kind, DECOR[name][2:], SIGN_SIZE[kind]))
     if p.get("soft"):
         # 先补描边再擦角：装饰都是整格矩形，描边正好落在格内不会渗到邻格。
         # 没有这圈边，米色墙配米色柜子就糊成一片（E 的 metal/bg 对比只有 1.3）。
