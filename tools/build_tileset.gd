@@ -8,7 +8,7 @@ extends SceneTree
 ## 结构（D24）：
 ##   source 0 = tilesheet_terrain.png，16 个单格瓦片，每格一块整格碰撞多边形，
 ##              并挂到 terrain set 0（TERRAIN_MODE_MATCH_SIDES）做四侧自动拼贴；
-##   source 1 = tilesheet_decor.png，12 块装饰（含 wall_fill / shade），无碰撞。
+##   source 1 = tilesheet_decor.png，装饰整份清单（含 wall_fill / shade、两块无字告示牌 D56），无碰撞。
 ## 物理层 0：collision_layer=1（terrain）、mask=0 —— 和 platform.tscn 同一层。
 ##
 ## 用法（PNG 必须先被导入，否则 load() 拿不到纹理）：
@@ -100,6 +100,17 @@ func _initialize() -> void:
 			failures += 1
 	print("decor: %d 块 / 无碰撞" % decor.get_tiles_count())
 
+	# uid 必须跨次生成不变：场景里的 ext_resource 记着 uid="..."，把它丢掉引擎就当场
+	# 另发一个，所有引用退化成按路径找，level1.tscn 与 level_template.tscn 各指一份。
+	var old_uid := ""
+	var rh := FileAccess.open(OUT, FileAccess.READ)
+	if rh != null:
+		var found: RegExMatch = RegEx.create_from_string('uid="([^"]+)"').search(rh.get_line())
+		if found != null:
+			old_uid = found.get_string(1)
+	if old_uid != "":
+		ts.set_resource_uid(old_uid)
+
 	var err := ResourceSaver.save(ts, OUT)
-	print("saved ", OUT, " err=", err, " failures=", failures)
+	print("saved ", OUT, " uid=", old_uid, " err=", err, " failures=", failures)
 	quit(1 if (failures > 0 or err != OK) else 0)

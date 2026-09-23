@@ -1789,4 +1789,6 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 
 **守门**：`tileset_selftest` 装饰段清单驱动，新增两格自动过那四条（checks 308 → 316，**守门代码一行未改**）；`gen_tiles.build_decor_atlas` 里加一条生成期断言 —— `DECOR` 那两格的宽高必须等于 `SIGN_SIZE`，写宽了画法会渗进邻格、图集里看不出来、刷进关卡才现形。四条无头守门全绿（`VERIFY DONE doors=3 pistons=2 fallzones=0 failures=0` / `[kit-selftest] done failures=0` / `SPRITE SELFTEST DONE failures=0` / `TILESET SELFTEST DONE failures=0 checks=316`）。像素照旧不归无头管（D46 同规矩）。
 
+**补记（D56 提交之后当天踩到）**：无头跑 `build_tileset.gd` 会把它自己写出来的那份 `uid="..."` 丢掉（引擎只在编辑器保存资源时填这一行），于是 `lab_tileset.tres` 的资源身份每次重建都归零 —— 编辑器下一拍另发一个新 uid，而所有 `.tscn` 里 `[ext_resource type="TileSet" uid="..."]` 记的还是旧的，引用退化成按路径找，且**用户那份 `level1.tscn` 已被编辑器顺手改写成了新 uid**（我没碰他的文件）。现在生成器在 `ResourceSaver.save()` 之前先读回头里的旧 uid 再 `set_resource_uid()` 回填，uid 从此跨生成稳定。**口径：凡会被场景按 uid 引用的资源，都不许在无头生成脚本里"从零 write"。**
+
 **How to apply**：以后"要加一句提示"，先问**这句话能不能由已在册的形状 / 颜色承担**（琥珀 = 可拾取、卡形 = 那只卡、亮边 = 暗墙上唯一可见的东西，三样都是现成的），能就不新建语义；纯静态的提示一律走装饰格 —— 一条清单 + 一个画法函数就够，不进契约、不加场景、守门还是现成那四条。以及：**同一块牌不许两处书写**，落盘画法与选型图画法必须是同一个函数，"逐字节相同"不是应当如此，是当场 `tobytes()` 比过。
