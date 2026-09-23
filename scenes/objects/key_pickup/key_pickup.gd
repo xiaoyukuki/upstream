@@ -22,6 +22,13 @@ extends Area2D
 ## 所以世界停在冻结那一拍里、卡照样飞完，且与门的光幕同一条钟、同拍结束。
 ## 时长只住在门的 swipe_time 上，卡这一侧不另存一份常量，靠 consume() 的参数拿。
 ##
+## D55：卡坐在**公共底座**上（与 D54 那只彩蛋同一张零件）。这一条替代了「像鸭子那样转」的
+## 原方案 —— 转要解决的正是「玩家朝它走时世界必然冻着」（D40/D41 那条地基），提示会在最
+## 需要它的那一刻关掉；底座是静态形状语言，冻着也照样说话。所以这张卡**不转、不挂
+## TimeReceiver、一个导出项都不加**（旋钮留给人眼的那几条里没它）。座子只在"在位"那一态
+## 是 idle，卡一进身体或已被门吐掉就换 taken 那道压痕；重载时实例整体归位、座子跟着回到
+## idle（D30 第 3 条），与彩蛋那条"永久空座"是同一种皮、两种账（彩蛋不是机制素材，不复生）。
+##
 ## @tool：编辑器里在原位画卡（摆图定位用）。
 
 ## 已被玩家持有（含在体内，画在玩家脚底上方）。
@@ -34,6 +41,10 @@ var _fly_elapsed: float = -1.0
 var _fly_time: float = 0.0
 
 const TEX_CARD: Texture2D = preload("res://assets/props/key_card.png")
+## 公共底座（D55）：与 `Collectible` 用的是同一张落盘零件，不新画、不进 `props.json` 对账的
+## 新增项 —— 它已经在册（D54 那一批）。尺寸一律从贴图读，不写第二份数。
+const TEX_PERCH_IDLE: Texture2D = preload("res://assets/props/perch_idle.png")
+const TEX_PERCH_TAKEN: Texture2D = preload("res://assets/props/perch_taken.png")
 ## 拾取带：卡 14 宽，带子放宽到 32 让「擦过去也能捡到」；高度沿用按钮那条带心契约。
 const BAND_W: float = 32.0
 const BAND_H: float = 24.0
@@ -92,6 +103,12 @@ func is_held() -> bool:
 	return held
 
 
+## 座子上此刻有没有卡（D55）。空座皮只认这一个判据，画的那一侧也读它 ——
+## 两态判定写两份迟早只改一边，而"卡走了座子还画成满的"正是那种不响的错。
+func seat_occupied() -> bool:
+	return not held and not consumed and _fly_elapsed < 0.0
+
+
 ## 飞出进度 0..1，不在飞出时返回 -1。守门读它核对「卡与幕同拍结束」。
 func fly_progress() -> float:
 	if _fly_elapsed < 0.0:
@@ -128,14 +145,19 @@ func _rebuild() -> void:
 	queue_redraw()
 
 
-## 原地画卡 / 含在体内 / 正被门吐出去 / 消耗完什么都不画，四种状态一眼分开。
+## 原地画卡 / 含在体内 / 正被门吐出去 / 消耗完只剩空座，四种状态一眼分开。
+## 底座永远画在构件原地、不跟玩家走（D55）：它是「这里放过一张卡」的那块地方，不是卡的一部分。
 func _draw() -> void:
+	var on_seat: bool = seat_occupied()
+	var perch_h := float(TEX_PERCH_IDLE.get_height())
+	draw_texture(TEX_PERCH_IDLE if on_seat else TEX_PERCH_TAKEN,
+		Vector2(-float(TEX_PERCH_IDLE.get_width()) * 0.5, -perch_h))
 	if consumed and _fly_elapsed < 0.0:
 		return
 	var src := Rect2(0.0, 0.0, float(TEX_CARD.get_width()), float(TEX_CARD.get_height()))
-	if not held and _fly_elapsed < 0.0:
+	if on_seat:
 		draw_texture_rect_region(TEX_CARD,
-			Rect2(-TEX_CARD.get_width() * 0.5, -float(TEX_CARD.get_height()),
+			Rect2(-TEX_CARD.get_width() * 0.5, -perch_h - float(TEX_CARD.get_height()),
 				float(TEX_CARD.get_width()), float(TEX_CARD.get_height())), src)
 		return
 	var player := get_tree().get_first_node_in_group(&"player") as Player

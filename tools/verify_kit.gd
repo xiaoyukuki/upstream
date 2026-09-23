@@ -313,6 +313,22 @@ func _verify_m5_geometry() -> void:
 	if card_shape.shape.size != Vector2(32.0, 24.0) or card_shape.position != Vector2(0.0, BAND_CENTRE):
 		_fail("KeyPickup 拾取带 %s @ %s（应 32x24 @ (0,-15)）"
 			% [str(card_shape.shape.size), str(card_shape.position)])
+	# D55：卡坐在**与彩蛋同一张**公共底座上（用户自己提的解法，替代「像鸭子那样转」）。
+	# 这条只钉三件事，全属"改了不响"那类：① 那两张零件常量确实指向落盘的那两张 —— 复制一份
+	# 副本的话换风格只会有一半跟着换；② 判定带**不跟着长高**（上面那条 32x24 @ (0,-15) 就是它，
+	# 座子把外接框从 10 抬到 15 也不许顺手改成贴外接框，那是 D54 的规矩不是这里的）；
+	# ③ 这张卡**不吃时钟**：没有 TimeReceiver 子节点、一个 @export 都没有 —— 提示压在形状上，
+	# 形状本来就不需要走时间，加了旋钮就说明有人把它改回了转。
+	var card_cs: Dictionary = (load(KEY_SCRIPT) as GDScript).get_script_constant_map()
+	for pair in [["TEX_PERCH_IDLE", "perch_idle"], ["TEX_PERCH_TAKEN", "perch_taken"]]:
+		var tex: Texture2D = card_cs.get(pair[0])
+		if tex == null or tex.resource_path != "res://assets/props/%s.png" % pair[1]:
+			_fail("KeyPickup 的 %s 不指向落盘的 %s.png（D55 是复用零件，不是新画一张）"
+				% [pair[0], pair[1]])
+	if card.get_node_or_null("TimeReceiver") != null:
+		_fail("KeyPickup 挂了 TimeReceiver：那张卡不该有属于自己的世界时间（D55 定的是形状语言，不转）")
+	if FileAccess.get_file_as_string(KEY_SCRIPT).contains("@export"):
+		_fail("KeyPickup 出现了 @export：D55 明确不给它加旋钮（要转就回到 D54 那条通道重新裁定）")
 
 	var save_point = _enter("res://scenes/objects/checkpoint/checkpoint.tscn")
 	_check_area_layers(save_point, "Checkpoint", 8)

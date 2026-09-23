@@ -1350,21 +1350,23 @@ def part_duck_back(p):
     return _rim(img, p)
 
 
-def part_perch(p, taken, dim=False):
+def part_perch(p, taken, dim=False, w=PERCH_W):
     """公共底座 14x5：所有候选共用同一只，选型时比的是"上面那只"而不是座子。
     taken=True 时顶面多一道压痕（比座子更暗的一档）—— 这就是"拿走了"的收据（D54 裁定⑤）。
     dim=True 是收据的**加强档**：连顶面那条亮线一起灭掉。选型时放进来是因为留痕那条读数
     实测只有"整只消失"的四到六成（座子占 footprint 两成像素、两态一字不差），用户取了
-    默认档，所以落盘走 dim=False —— 旋钮留着是给下次换主意的人，不是废码。"""
-    img = _cv(PERCH_W, PERCH_H)
+    默认档，所以落盘走 dim=False —— 旋钮留着是给下次换主意的人，不是废码。
+    `w` 是 D55 为选型图加的宽度旋钮（鸭子那只 14 与能量卡同宽、坐上去齐边，所以要量更宽的
+    座读不读得出"底座"）。**默认值就是落盘那张的宽度**，改这个数不会动到已落盘的零件。"""
+    img = _cv(w, PERCH_H)
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 13, 4], fill=p["deep"])
-    d.rectangle([0, 0, 13, 4], outline=p["lip"] if not dim else G.darker(p["lip"], 0.62))
-    d.rectangle([0, 0, 13, 0], fill=p["edge"] if dim else G.lighter(p["metal"], 0.16))
-    d.rectangle([0, 4, 13, 4], fill=p["edge"])
+    d.rectangle([0, 0, w - 1, 4], fill=p["deep"])
+    d.rectangle([0, 0, w - 1, 4], outline=p["lip"] if not dim else G.darker(p["lip"], 0.62))
+    d.rectangle([0, 0, w - 1, 0], fill=p["edge"] if dim else G.lighter(p["metal"], 0.16))
+    d.rectangle([0, 4, w - 1, 4], fill=p["edge"])
     if taken:
-        d.rectangle([2, 1, 11, 2], fill=G.mix(p["screen"], p["deep"], 0.35))
-        d.rectangle([2, 1, 11, 1], fill=p["screen"])
+        d.rectangle([2, 1, w - 3, 2], fill=G.mix(p["screen"], p["deep"], 0.35))
+        d.rectangle([2, 1, w - 3, 1], fill=p["screen"])
     return img
 
 

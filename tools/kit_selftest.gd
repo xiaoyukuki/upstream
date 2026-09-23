@@ -11,6 +11,7 @@ extends Node
 ##    且一次性（本条命只发一次）。
 ## 8) M5 刷卡门：踩卡即拾、冻结中带卡进感应带照样认卡（D38 第 4 条）、认卡后演一整拍（D41）
 ##    —— 移动被锁、幕逐行塌而碰撞体始终与画出来的同截、世界全程冻着，演完才让行并解锁。
+##    D55 起再加三钉：卡坐在公共底座上（在位态）、进身体即换空座、飞完不会自己装回满的。
 ## 9) M5 存档与回灌（D31）：踩存档点写进常驻根 run_state、危险物点名走「保留进度的重载」、
 ##    新关卡实例回灌重生位与祭坛已耗（能力直接开，不重播静止即启）。
 ##    死亡那一拍（D42）：点名当帧只起演出、演完才重载且只重载一次，演出期间世界被钉在
@@ -311,6 +312,8 @@ func _test_key_door() -> void:
 	gate.key = NodePath("../Card")
 	gate_rig.add_child(card)
 	gate_rig.add_child(gate)
+	# D55：卡坐在公共底座上。这条必须在放人之前读 —— 人一生成就压在卡上，在位态当场就没了。
+	_check("开场：卡坐在底座上（D55 的在位态）", card.seat_occupied())
 
 	var gate_col := gate.get_node("CollisionShape2D") as CollisionShape2D
 	var gate_rect := gate_col.shape as RectangleShape2D
@@ -320,6 +323,7 @@ func _test_key_door() -> void:
 	add_child(courier)
 	await _frame(3)
 	_check("玩家踩上卡即拾取（接触判定不吃世界 delta）", card.held)
+	_check("卡进了身体 → 座子立刻换成空座（D55 的皮跟着状态走）", not card.seat_occupied())
 
 	# 还没认卡的那一态：实体与画出来的同宽同底、且都挡满门洞。
 	var locked: Rect2 = gate.curtain_rect()
@@ -369,6 +373,7 @@ func _test_key_door() -> void:
 	_check("撤幕后不再画光幕", gate.curtain_rect().size.y == 0.0)
 	await _frame(2)
 	_check("卡与门同拍收尾（门开完时卡也飞完了）", card.fly_progress() < 0.0)
+	_check("飞完之后原地只剩空座，不会自己装回满的（D55）", card.consumed and not card.seat_occupied())
 	_check("收尾把移动还回玩家", not courier.movement_locked)
 	courier.position = Vector2(courier.global_position.x, -Player.COLLISION_HALF_HEIGHT)
 	var x_after: float = courier.global_position.x
