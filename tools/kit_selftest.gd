@@ -688,7 +688,8 @@ func _test_afterimage() -> void:
 		absf(walker.position.y - (stand_y - Player.COLLISION_HALF_HEIGHT)) < 1.0)
 	var sink: float = (walker.position.y + Player.COLLISION_HALF_HEIGHT) - stand_y
 	_check("站在冻结的踏面上 20 拍：一个判死信号都没有（踩住了不算 inside）", poked.is_empty())
-	_check("物理把人停在踩面上的穿透实测 %s px，留在内缩带 2 px 里" % str(sink), absf(sink) < 2.0)
+	var inset: float = emitter.get_script().get_script_constant_map()["KILL_INSET"]
+	_check("物理把人停在踩面上的穿透实测 %s px，留在内缩带 %s px 里" % [str(sink), str(inset)], absf(sink) < inset)
 
 	# 松手 → 格子从脚底下走掉（它 400 px/s，人从零速起落）→ 再冻结。这几拍上一格一定会
 	# 压到头顶（站在踩面上时头顶离上一格只有 18 px），但**落脚点还是虚的**：按 D48 只问
