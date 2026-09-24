@@ -17,6 +17,7 @@ extends SceneTree
 
 const MANIFEST := "res://assets/tiles/tiles.json"
 const OUT := "res://assets/tiles/lab_tileset.tres"
+const UIDS := preload("res://tools/keep_uid.gd")
 
 
 func _initialize() -> void:
@@ -102,15 +103,12 @@ func _initialize() -> void:
 
 	# uid 必须跨次生成不变：场景里的 ext_resource 记着 uid="..."，把它丢掉引擎就当场
 	# 另发一个，所有引用退化成按路径找，level1.tscn 与 level_template.tscn 各指一份。
-	var old_uid := ""
-	var rh := FileAccess.open(OUT, FileAccess.READ)
-	if rh != null:
-		var found: RegExMatch = RegEx.create_from_string('uid="([^"]+)"').search(rh.get_line())
-		if found != null:
-			old_uid = found.get_string(1)
-	if old_uid != "":
-		ts.set_resource_uid(old_uid)
-
+	# 走文本而不是 set_resource_uid()：4.6 的 SpriteFrames 上根本没那个方法（见 keep_uid.gd），
+	# 两份生成脚本从此用同一双手。
+	var old_uid: String = UIDS.read(OUT)
+	var old_ext: Dictionary = UIDS.read_ext_uids(OUT)
 	var err := ResourceSaver.save(ts, OUT)
-	print("saved ", OUT, " uid=", old_uid, " err=", err, " failures=", failures)
-	quit(1 if (failures > 0 or err != OK) else 0)
+	var uid_kept: bool = UIDS.restore(OUT, old_uid) and UIDS.restore_ext_uids(OUT, old_ext)
+	print("saved ", OUT, " uid=", old_uid, " uid_kept=", uid_kept, " err=", err,
+		" failures=", failures)
+	quit(1 if (failures > 0 or err != OK or not uid_kept) else 0)

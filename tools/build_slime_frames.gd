@@ -11,6 +11,7 @@ extends SceneTree
 
 const DIR := "res://assets/player/slime"
 const OUT := "res://assets/player/slime_frames.tres"
+const UIDS := preload("res://tools/keep_uid.gd")
 
 
 func _initialize() -> void:
@@ -45,6 +46,13 @@ func _initialize() -> void:
 		print("clip %-5s %d 帧 / %s fps / loop=%s" % [
 			clip, frames.get_frame_count(clip), spec.fps, spec.loop])
 
+	# uid 必须跨次生成不变：player.tscn 的 ext_resource 记着 uid="..."，从新建资源 save()
+	# 出来的 .tres 会丢掉这个头，引擎下次编辑时另发一个，引用就退化成按路径找。
+	# 账要在 save() 之前拍 —— 存盘之后原文件里那些数就没了。
+	var old_uid: String = UIDS.read(OUT)
+	var old_ext: Dictionary = UIDS.read_ext_uids(OUT)
 	var err := ResourceSaver.save(frames, OUT)
-	print("saved ", OUT, " err=", err, " failures=", failures)
-	quit(1 if (failures > 0 or err != OK) else 0)
+	var uid_kept: bool = UIDS.restore(OUT, old_uid) and UIDS.restore_ext_uids(OUT, old_ext)
+	print("saved ", OUT, " uid=", old_uid, " uid_kept=", uid_kept, " err=", err,
+		" failures=", failures)
+	quit(1 if (failures > 0 or err != OK or not uid_kept) else 0)
