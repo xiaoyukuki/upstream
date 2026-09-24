@@ -73,6 +73,7 @@ func _ready() -> void:
 	TimeManager.set_ability_enabled(start_with_ability)
 	_place_player()
 	_apply_run_state()
+	_maybe_intro()
 	_apply_camera_limits()
 	_grab_handler()
 	_bind_altar()
@@ -113,6 +114,23 @@ func _set_player_start(pos: Vector2) -> void:
 	player.global_position = pos
 	player.spawn_point = pos
 	player.velocity = Vector2.ZERO
+
+
+## 开局苏醒那一拍（D57）。**演不演由关卡根决定**：Player 不知道自己是不是"这个进程的第一次"，
+## 常驻根才晓得（它比关卡活得久），而"要不要现在掐住玩家的输入"是编排、归关卡根（D49 口径）。
+## 取走即消耗 —— 死亡重载与 R 重开都发生在同一个进程里，因此都不再演。
+## F6 直跑关卡场景时这里整条不在场（`_world_root()` 返回 null），演不演都不问：摆图的人不该被这一拍挡路。
+## 与 `_apply_run_state()` 同一条口径：能力由 `_world_root()` 那道闸认过，这里就直接 call，
+## 不另补一遍 has_method —— 那条按名字读的契约由 verify_kit 的 METHODS 钉住。
+func _maybe_intro() -> void:
+	var root := _world_root()
+	if root == null:
+		return
+	if not bool(root.call(&"take_intro")):
+		return
+	var player: Player = get_tree().get_first_node_in_group(&"player")
+	if player != null:
+		player.begin_wake()
 
 
 ## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子；

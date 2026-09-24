@@ -123,6 +123,11 @@ func _track_wall_press() -> void:
 
 
 func _pick() -> StringName:
+	# 开局苏醒（D57）压过一切，连腾空那条判据也压：这一拍里 Player 把水平、跳跃、蹲伏全掐了，
+	# 唯一还可能发生的是出生位那几像素的下落，而"落地瞬间换 fall、过两帧又换回 wake"才是谎。
+	# 窗口一过这里自动交回正常状态机 —— wake 末帧与 idle 第 0 帧同参数，接缝看不出来。
+	if _player.is_waking():
+		return &"wake"
 	if not _player.is_on_floor():
 		if _player.velocity.y > FALL_SPEED:
 			return &"fall"

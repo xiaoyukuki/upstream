@@ -34,6 +34,12 @@ var _current_level: Node
 ##   不是"重活一次"。
 var run_state: Dictionary = {}
 
+## 开局苏醒演过了没（D57，用户裁 A1 档 = 每次**进程启动**演一次）。刻意不住在
+## `run_state` 里：那个字典在换关与 R 重开时被清空，而苏醒不该跟着重来一次 ——
+## 它记的是"这个进程有没有开场过"，与进度无关。也不落盘：项目目前没有跨进程的存档（M6 未开工），
+## 为一个 bool 开第一条写盘路径不值得，等 M6 的存档真来了再把它搬进去。
+var _intro_played: bool = false
+
 @onready var _level_container: Node2D = $LevelContainer
 
 
@@ -81,6 +87,16 @@ func reload_level() -> void:
 
 func get_run_state() -> Dictionary:
 	return run_state
+
+
+## 一次性取用"这个进程还没演过开场"这个事实：第一个进关的关卡根把它拿走，之后一律 false。
+## 设计成 take 而不是 let 关卡读布尔再自己写，是为了不给关卡"读到了但忘了写回"的机会 ——
+## 那种漏法在画面上的表现是每关开局都演一遍，正是 D51 那条"有读没人写"的镜像。
+func take_intro() -> bool:
+	if _intro_played:
+		return false
+	_intro_played = true
+	return true
 
 
 ## M1 验收「30fps 与 60fps 下判定一致」的开关：F1 在不限帧与 30fps 之间切换。

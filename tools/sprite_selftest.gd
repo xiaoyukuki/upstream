@@ -12,6 +12,8 @@ extends Node2D
 ## 5. 底边是波浪不是直线，且任何一列都不越过脚底基线（脚底对齐是美术与碰撞的契约）；
 ## 6. 推墙时贴墙一侧压平到碰撞盒边界（D23：墙侧越界 = 0），且同样是纯表现。
 ## 另外第 3 组守两条几何底线：站姿轮廓宽 > 高（要的是「扁」），最宽帧不挤 40 px 最小门洞。
+## 第 11 组钉开局那一拍（D57）：苏醒窗口里皮只能是 wake，方向键/下键/跳跃一律掐掉，
+## 窗口到点自己把移动锁还回来 —— 锁只由 begin_wake 挂、由窗口收，别处不该碰它。
 ##
 ## 落地相关的断言一律「等到 is_on_floor 再往后 1~2 帧」而不是数固定帧数：
 ## land 剪辑窗口只有 0.2s，靠估时间会漂。
@@ -104,6 +106,9 @@ func _run() -> void:
 		"jump": [2, false], "jump_straight": [2, false], "fall": [3, true], "land": [4, false],
 		"crouch_in": [3, false], "crouch": [4, true], "crouch_out": [2, false],
 		"wall_press_in": [2, false], "wall_press": [2, true], "wall_press_out": [2, false],
+		# 开局苏醒（D57）：8 帧不循环。挂在这里顺带被第 3 组的「全剪辑最宽 ≤36 px」扫到 ——
+		# 摊平那几帧最宽，正是那条门洞约束该管的东西。
+		"wake": [8, false],
 	}
 	for clip in expected.keys():
 		var want: Array = expected[clip]
@@ -405,6 +410,47 @@ func _run() -> void:
 	_check(is_equal_approx(_foot_local(), Player.COLLISION_HALF_HEIGHT),
 		"起身后脚底仍在 +%.0f（实际 %.2f）" % [Player.COLLISION_HALF_HEIGHT, _foot_local()])
 	_check(_sprite.animation == &"idle", "起身后回 idle（实际 %s）" % _sprite.animation)
+
+	print("[sprite_selftest] 11. 开局苏醒那一拍（D57：皮不许说谎，窗口到点自己撒手）")
+	_player.velocity = Vector2.ZERO
+	_player.global_position = Vector2(200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _step(6)
+	_player.begin_wake()
+	_check(_player.is_waking(), "begin_wake 后进入苏醒窗口")
+	# 皮慢一帧：PlayerVisual 是在自己的那一拍里读 is_waking() 换剪辑的，同一帧内它还是上一拍的脸。
+	# 这一帧的延迟正是"窗口刚开就断言皮"会读到的东西，所以先走两帧再判。
+	await _step(2)
+	_check(_sprite.animation == &"wake", "窗口内皮播 wake（实际 %s）" % _sprite.animation)
+	var wake_x: float = _player.global_position.x
+	Input.action_press(&"move_right")
+	await _step(5)
+	_check(_sprite.animation == &"wake", "按着方向键也不切 start/run（实际 %s）" % _sprite.animation)
+	_check(is_equal_approx(_player.global_position.x, wake_x),
+		"按着方向键人不位移（x=%.1f）" % _player.global_position.x)
+	Input.action_press(&"move_down")
+	await _step(4)
+	_check(not _player.is_crouching, "窗口内按下键不偷蹲（is_crouching=%s）" % _player.is_crouching)
+	_check(_sprite.animation == &"wake", "窗口内也不切压扁剪辑（实际 %s）" % _sprite.animation)
+	Input.action_release(&"move_down")
+	Input.action_press(&"jump")
+	await _step(4)
+	Input.action_release(&"jump")
+	_check(_player.is_on_floor() and absf(_player.velocity.y) < 1.0,
+		"窗口内按跳跃不起跳（on_floor=%s vy=%.1f）" % [_player.is_on_floor(), _player.velocity.y])
+	Input.action_release(&"move_right")
+	# 窗口 1.15s ≈ 69 物理帧，上面已吃掉十几帧。这里刻意多等到富余而不是掐准：
+	# 掐准的帧数会随 WAKE_SECONDS 或剪辑帧表任何一次改动就漂，那是断言在钉常数而不是钉行为。
+	await _step(70)
+	_check(not _player.is_waking(), "窗口过后苏醒结束")
+	_check(not _player.movement_locked,
+		"窗口过后自动把移动锁还回来（实际 locked=%s）" % _player.movement_locked)
+	_check(_sprite.animation == &"idle", "wake 末帧交回后回 idle（实际 %s）" % _sprite.animation)
+	# 醒过一次就是醒着的人：存档点复活不该再躺一遍，也不该把窗口里的锁留在身上。
+	_player.begin_wake()
+	_player.respawn()
+	_check(not _player.is_waking() and not _player.movement_locked,
+		"respawn 既不留窗口也不留锁（waking=%s locked=%s）"
+			% [_player.is_waking(), _player.movement_locked])
 
 	print("SPRITE SELFTEST DONE failures=%d" % _failures)
 	get_tree().quit(1 if _failures > 0 else 0)

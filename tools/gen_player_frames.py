@@ -42,6 +42,7 @@ PAL = {
 }
 
 CLIPS = {
+    "wake": {"loop": False, "fps": 7.0},
     "idle": {"loop": True, "fps": 6.0},
     "run": {"loop": True, "fps": 14.0},
     "start": {"loop": False, "fps": 16.0},
@@ -219,6 +220,22 @@ def draw_slime(w, h, lean=0.0, dome_lean=0.0, eye_open=1.0, eye_dy=0.0, eye_scal
 # 高度不能再降，否则 20x30 碰撞盒的顶边会露在美术之外；宽度不能再加，第一章最小门洞 40 px。
 # 行进方向的读法全靠 dome_lean：头顶相对脚底的剪切位移，正 = 往前扑，负 = 往后甩。
 FRAMES = {
+    # 开局苏醒（D57）：零文字，所以"睡着"只能由形状与眼睛开合说 —— 一坨摊平的身体 +
+    # 闭成一条缝的眼皮，呼吸就靠那两帧几乎一样的起伏。第三条嘴（现成的 2x2 mouth="open"）
+    # 是哈欠，不是新零件。最后两帧是弹过头再压回来，收帧参数与 idle 第 0 帧一字不差，
+    # 演完交回循环时接缝才看不出跳（这段是不循环的，停在哪一帧就是玩家看见的第一眼）。
+    # 摊平那帧 w=35 是守门第 3 组"全剪辑最宽 ≤36 px"给的上限（那条钉的是 40 px 最小门洞）。
+    "wake": [
+        dict(w=34, h=9, flare=1.04, eye_open=0.2, eye_dy=-1.0, nubs=(1, 1)),
+        dict(w=33, h=11.5, flare=1.04, eye_open=0.2, eye_dy=-1.2, nubs=(1, 1)),
+        dict(w=34, h=9.5, flare=1.04, eye_open=0.2, eye_dy=-1.1, nubs=(1, 1)),
+        dict(w=32, h=14, flare=1.04, eye_open=0.5, eye_dy=-1.2, nubs=(1, 1)),
+        dict(w=30, h=18, flare=1.06, dome_lean=-2.0, eye_dy=-0.6,
+             mouth="open", nubs=(1, 1)),
+        dict(w=26, h=27, flare=0.92, dome=1.05, eye_dy=0.4, mouth="open", nubs=(0, 0)),
+        dict(w=32, h=21, flare=1.06, eye_dy=0.6, nubs=(1, 1)),
+        dict(w=31, h=25, nubs=(1, 1)),
+    ],
     "idle": [
         dict(w=31, h=25),
         dict(w=31, h=24),
@@ -355,7 +372,8 @@ def in_game_preview(out):
     seq 每项是 (clip, i, wall)；wall=True 的格子会在碰撞盒右边界外贴一块墙 —— 用来肉眼验
     贴墙压平有没有真的收进盒内。墙必须先画、帧后贴，否则墙会把越界的部分盖掉，预览就白做了。"""
     seq = [(c, i, False) for c, i in
-           [("idle", i) for i in range(8)] + [("run", i) for i in range(6)]] + [
+           [("wake", i) for i in range(8)]
+           + [("idle", i) for i in range(8)] + [("run", i) for i in range(6)]] + [
         ("jump", 1, False), ("jump_straight", 0, False), ("jump_straight", 1, False),
         ("fall", 1, False), ("land", 0, False),
         ("crouch_in", 2, False), ("crouch", 0, False), ("crouch_out", 0, False),
@@ -407,7 +425,7 @@ def anim_preview(out, scale=6):
     imgs, durs = [], []
     ground = (FRAME // 2 + 15) * scale  # local y=+15 所在的屏幕行
     wall_x = (FRAME // 2 + 10) * scale  # 碰撞盒右边界所在的屏幕列
-    for clip in ("idle", "crouch_in", "crouch", "crouch_out", "start", "run", "stop",
+    for clip in ("wake", "idle", "crouch_in", "crouch", "crouch_out", "start", "run", "stop",
                  "wall_press_in", "wall_press", "wall_press_out", "jump", "jump_straight",
                  "fall", "land"):
         walled = clip.startswith("wall_press")

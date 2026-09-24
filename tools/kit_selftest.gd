@@ -43,6 +43,9 @@ extends Node
 ##     对着选型图核对 —— GDScript 与 Python 那份是同一道算式的两处书写，只改一边必须当场响。
 ##     本条命只发一次信号；回灌走 mark_taken（空座、不重播演出、不再发），且 run_state 记的
 ##     是身份（相对关卡根的 NodePath）而不是位置 —— 换关后鸭子挪了格子也还得是空的。
+## 18) 开局苏醒的接线（D57）：整个进程只演一次 —— 关卡根在 _ready 里问常驻根要这一拍，
+##     常驻根"取走即消耗"，第二张关卡实例（= 同进程里再进关，含死亡重载）就不再演，
+##     进场的人身上也不该留着窗口里那把移动锁。窗口本身归 sprite_selftest 第 11 组。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -234,6 +237,7 @@ func _ready() -> void:
 	await _test_fall_zone()
 	await _test_gate_denial()
 	await _test_collectible()
+	await _test_wake_intro()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1443,6 +1447,39 @@ func _test_collectible() -> void:
 	await _frame(2)
 
 
+## 第 18 组：开局苏醒的接线（D57 裁定 D2 = 整个进程只演一次）。
+## 窗口里那些"掐输入、皮只播 wake、到点自己撒手"归 sprite_selftest 第 11 组，这一组只管
+## 三件事：谁问（关卡根 _ready）、谁答（常驻根 take_intro 取走即消耗）、答完之后不许再答。
+## ② 那条是 D51「有读没人写」的反面写法：标志翻过去发生在常驻根身上，关卡连"演过了"
+##    这个布尔都拿不到，所以它没有忘记写回的机会 —— 表现是每关开局都躺一遍。
+func _test_wake_intro() -> void:
+	var leftovers := get_tree().get_nodes_in_group(&"player")
+	_check("开跑前场上没有残留玩家（%d 个）" % leftovers.size(), leftovers.is_empty())
+	var root = _make_world_root()
+	root.intro_enabled = true
+
+	var first := _build_mini_level(root)
+	var sleeper: Player = first["walker"]
+	await _frame(2)
+	_check("本次进程第一次进关：人进入苏醒窗口（waking=%s）" % str(sleeper.is_waking()),
+		sleeper.is_waking())
+	_check("窗口里移动锁挂上（B2「整段掐输入」的落地方式就是 D41 那把锁）",
+		sleeper.movement_locked)
+	_check("「演过了」记在常驻根身上，不在关卡里", bool(root.intro_played))
+
+	(first["level"] as Node).queue_free()
+	await _frame(3)
+	var second := _build_mini_level(root)
+	var awake: Player = second["walker"]
+	await _frame(2)
+	_check("同一进程里换第二张关卡实例就不再演（waking=%s）" % str(awake.is_waking()),
+		not awake.is_waking())
+	_check("第二次进关的人一进场就没有移动锁（别把上一关的演出赖在他身上）",
+		not awake.movement_locked)
+	root.queue_free()
+	await _frame(2)
+
+
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒
 ## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
 func _fall_zone_instance(parent: Node, at: Vector2, width: float, depth: float) -> FallZone:
@@ -1566,6 +1603,8 @@ func _build_mini_level(parent: Node) -> Dictionary:
 ## Main 的替身：常驻根（world_root 组）+ get_run_state + 两条重载入口各自计数。
 ## 第 9、10 组都要一个关卡实例挂在「已经有 Main 在跑」的世界里；第 15 组要分清关卡
 ## 委托的是哪一条 —— reload_level 保留进度、restart_level 清空进度，只数一个就分不出来。
+## take_intro 与 Main 一样是"取走即消耗"，但外面套了一层 intro_enabled：其余各组都要按
+## 「不演苏醒」跑（第 14、15 组的人在等落体与回灌，凭空被锁 1.15 秒是埋雷），只有第 18 组打开它。
 func _make_world_root():
 	var stub = Node.new()
 	var stub_script := GDScript.new()
@@ -1574,12 +1613,19 @@ extends Node
 var run_state := {}
 var reload_calls := 0
 var restart_calls := 0
+var intro_enabled := false
+var intro_played := false
 func get_run_state() -> Dictionary:
 	return run_state
 func reload_level() -> void:
 	reload_calls += 1
 func restart_level() -> void:
 	restart_calls += 1
+func take_intro() -> bool:
+	if not intro_enabled or intro_played:
+		return false
+	intro_played = true
+	return true
 """
 	stub_script.reload()
 	stub.set_script(stub_script)

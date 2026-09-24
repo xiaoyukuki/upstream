@@ -54,6 +54,11 @@
   "frames": 3,
   "loop": false
  },
+ "wake": {
+  "fps": 7.0,
+  "frames": 8,
+  "loop": false
+ },
  "wall_press": {
   "fps": 6.0,
   "frames": 2,

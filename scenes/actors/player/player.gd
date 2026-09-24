@@ -45,6 +45,10 @@ const DEATH_SHRINK_SPAN: float = 0.6
 ## g/b 抬得比 r 多，于是那一下读作泛起祭坛核心的青色，而不是整只变白。
 const GRANT_GLOW: Color = Color(1.0, 1.22, 1.35, 1.0)
 
+## 开局苏醒那一拍多长（D57）。wake 剪辑 8 帧 / 7fps = 1.143 s，取 1.15 覆盖到状态机
+## 换回 idle 的那一帧 —— 与 LAND_CLIP_SECONDS 同一口径：窗口比剪辑略长，交接处才不露接缝。
+const WAKE_SECONDS: float = 1.15
+
 @export_group("Horizontal")
 @export var move_speed: float = 260.0
 @export var ground_acceleration: float = 2600.0
@@ -94,6 +98,10 @@ var _death_time: float = 0.0
 
 var _coyote_remaining: float = 0.0
 var _buffer_remaining: float = 0.0
+## 开局苏醒那一拍还剩多久（D57）。0 = 不在苏醒里。与 `_death_elapsed` 同一口径：
+## 一次性演出走引擎固定步长（玩家本就豁免时停，这里的 delta 就是物理步），
+## 不吃门控 delta —— 否则"演到一半被按方向键冻住"正是玩家看见的第一个 bug。
+var _wake_remaining: float = 0.0
 var _was_on_floor: bool = false
 ## 能力入体那一拍的提亮还剩多久（D44）。总长单独存一份是为了把亮度归一化到 0~1 再衰减。
 var _grant_glow: float = 0.0
@@ -152,12 +160,18 @@ func _physics_process(delta: float) -> void:
 	if is_dead:
 		_advance_death(delta)
 		return
+	# 开局苏醒那一拍（D57）。放在所有输入读取之前：窗口结束那一帧就该把控制权交回去，
+	# 而不是让那一帧的方向键照样生效。
+	if _wake_remaining > 0.0:
+		_wake_remaining = maxf(0.0, _wake_remaining - delta)
+		if _wake_remaining == 0.0:
+			movement_locked = false
 	_coyote_remaining = maxf(0.0, _coyote_remaining - delta)
 	_buffer_remaining = maxf(0.0, _buffer_remaining - delta)
 
 	if Input.is_action_just_pressed(&"jump"):
 		_buffer_remaining = jump_buffer_time
-	is_crouch_held = Input.is_action_pressed(&"move_down")
+	is_crouch_held = Input.is_action_pressed(&"move_down") and not is_waking()
 	# 必须在 _try_jump() 之前：被压住时能不能起跳取决于这一帧的判定结果。
 	_update_crouch()
 
@@ -172,11 +186,26 @@ func _physics_process(delta: float) -> void:
 	_update_wall_press()
 
 
+## 开局苏醒那一拍（D57）：由关卡根在**本次进程第一次进关**时叫一次。演的是"从睡梦里醒"，
+## 所以整段掐输入（用户裁 B2）—— 掐的是 D41 那把现成的移动锁，不另起第二套掐法。
+## 只有水平与跳跃走那把锁；蹲伏走 `is_crouch_held` 那一条读法（皮不许在 wake 里偷蹲）。
+func begin_wake() -> void:
+	_wake_remaining = WAKE_SECONDS
+	movement_locked = true
+
+
+## 皮读它决定播不播 wake 剪辑，守门也读它。苏醒期间人不移动，所以世界照常流动 ——
+## 这一拍与"冻结"无关，只与"他还没醒"有关。
+func is_waking() -> bool:
+	return _wake_remaining > 0.0
+
+
 func respawn() -> void:
 	global_position = spawn_point
 	velocity = Vector2.ZERO
 	_coyote_remaining = 0.0
 	_buffer_remaining = 0.0
+	_wake_remaining = 0.0
 	is_crouching = false
 	is_head_blocked = false
 	movement_locked = false

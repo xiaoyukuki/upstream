@@ -73,6 +73,13 @@ const SCENES := [
 	"res://scenes/levels/main.tscn",
 ]
 
+## 按名字读入口的地方 = 改一个名字就静默失效的地方。LevelBase 问常驻根要这一拍时走的是
+## `root.call(&"take_intro")`（D57），那道 `_world_root()` 的闸只认 get_run_state、拦不住改名，
+## 所以这里按同一份名单逐个点名：少一个就是 FAIL，而不是"开局动画再也没有、也没人说什么"。
+const METHODS := {
+	"res://scenes/levels/main.gd": ["get_run_state", "take_intro", "reload_level", "restart_level"],
+}
+
 const EXPORTS := {
 	"res://scenes/objects/door/door.gd": ["height", "width", "open_time", "trigger"],
 	"res://scenes/objects/button_plate/button_plate.gd": ["width", "sensor_height", "press_depth"],
@@ -150,6 +157,10 @@ func _initialize() -> void:
 			for property in EXPORTS[path]:
 				if not (property in instance):
 					_fail("missing export %s on %s" % [property, path])
+		if METHODS.has(path):
+			for method in METHODS[path]:
+				if not instance.has_method(method):
+					_fail("missing method %s on %s" % [method, path])
 		instance.free()
 	for path in TOOL_SCRIPTS:
 		if not FileAccess.get_file_as_string(path).begins_with("@tool"):
