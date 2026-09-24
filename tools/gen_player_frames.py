@@ -42,7 +42,7 @@ PAL = {
 }
 
 CLIPS = {
-    "wake": {"loop": False, "fps": 7.0},
+    "wake": {"loop": False, "fps": 5.0},
     "idle": {"loop": True, "fps": 6.0},
     "run": {"loop": True, "fps": 14.0},
     "start": {"loop": False, "fps": 16.0},
@@ -220,21 +220,41 @@ def draw_slime(w, h, lean=0.0, dome_lean=0.0, eye_open=1.0, eye_dy=0.0, eye_scal
 # 高度不能再降，否则 20x30 碰撞盒的顶边会露在美术之外；宽度不能再加，第一章最小门洞 40 px。
 # 行进方向的读法全靠 dome_lean：头顶相对脚底的剪切位移，正 = 往前扑，负 = 往后甩。
 FRAMES = {
-    # 开局苏醒（D57）：零文字，所以"睡着"只能由形状与眼睛开合说 —— 一坨摊平的身体 +
-    # 闭成一条缝的眼皮，呼吸就靠那两帧几乎一样的起伏。第三条嘴（现成的 2x2 mouth="open"）
-    # 是哈欠，不是新零件。最后两帧是弹过头再压回来，收帧参数与 idle 第 0 帧一字不差，
-    # 演完交回循环时接缝才看不出跳（这段是不循环的，停在哪一帧就是玩家看见的第一眼）。
-    # 摊平那帧 w=35 是守门第 3 组"全剪辑最宽 ≤36 px"给的上限（那条钉的是 40 px 最小门洞）。
+    # 开局苏醒（D57 第一版被用户打回：「太快」+「和向下压扁的动画几乎一模一样」→ D58 重做）。
+    # 诊断：睡态只要走"压扁轴"（又宽又扁 + 底裙外翻 + 左右对称），就和 crouch 是同一条轮廓 ——
+    # 现状那版与 crouch 帧的轮廓对称差只有 4.2%，加侧倒反而缩到 2.6%。所以 D58 把"睡"搬到
+    # **收拢轴**上：又窄又圆（w 24 / h 20）、底裙往里卷（flare 0.86）、两只小耳全收（nubs 0,0），
+    # 与"往下压扁"在每一根轴上都是反的（对称差 10.4%，2.5 倍于现状）。
+    # 零文字，所以"睡着"只能由形状 + 眼睛开合说：眼皮闭成一条缝（eye_open 0.15）并滑到低处，
+    # 呼吸靠那四帧几乎一样的起伏；第四拍起是**点头打盹**（dome_lean 前后栽两下，眼睛仍闭着），
+    # 惊醒那一下才睁眼。哈欠用现成的 2x2 mouth="open"，不是新零件。
+    # 收帧参数与 idle 第 0 帧一字不差：这段不循环，停在哪一帧就是玩家看见的第一眼，
+    # 交回循环时接缝才看不出跳。
+    # 12 帧 / 5 fps = 2.4 s（D57 是 8 帧 / 7 fps = 1.14 s，用户判太快；D58 裁定仍整段掐输入，
+    # 所以这 2.4 s 里方向 / 跳跃 / 蹲伏全不响应 —— 那是他拍的 C1）。
+    # 最宽帧 34 px，仍在守门第 3 组"全剪辑最宽 ≤36 px"之内（那条钉的是 40 px 最小门洞）。
     "wake": [
-        dict(w=34, h=9, flare=1.04, eye_open=0.2, eye_dy=-1.0, nubs=(1, 1)),
-        dict(w=33, h=11.5, flare=1.04, eye_open=0.2, eye_dy=-1.2, nubs=(1, 1)),
-        dict(w=34, h=9.5, flare=1.04, eye_open=0.2, eye_dy=-1.1, nubs=(1, 1)),
-        dict(w=32, h=14, flare=1.04, eye_open=0.5, eye_dy=-1.2, nubs=(1, 1)),
-        dict(w=30, h=18, flare=1.06, dome_lean=-2.0, eye_dy=-0.6,
+        dict(w=24, h=20, flare=0.86, dome=1.07, eye_open=0.15, eye_dy=-1.2,
+             eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=21, flare=0.86, dome=1.07, eye_open=0.15, eye_dy=-1.2,
+             eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=20.4, flare=0.86, dome=1.07, eye_open=0.15, eye_dy=-1.2,
+             eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=21, flare=0.86, dome=1.07, eye_open=0.15, eye_dy=-1.2,
+             eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=19, flare=0.88, dome=1.06, dome_lean=4.5, eye_open=0.15,
+             eye_dy=-1.4, eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=18, flare=0.90, dome=1.05, dome_lean=-1.5, eye_open=0.15,
+             eye_dy=-1.6, eye_scale=0.6, nubs=(0, 0)),
+        dict(w=24, h=19, flare=0.88, dome=1.06, dome_lean=4.5, eye_open=0.15,
+             eye_dy=-1.4, eye_scale=0.6, nubs=(0, 0)),
+        dict(w=25, h=21, flare=0.86, dome=1.07, eye_open=0.5, eye_dy=-1.0,
+             eye_scale=0.7, nubs=(0, 0)),
+        dict(w=23, h=25, flare=0.92, dome=1.04, eye_open=0.4, eye_dy=0.2,
              mouth="open", nubs=(1, 1)),
-        dict(w=26, h=27, flare=0.92, dome=1.05, eye_dy=0.4, mouth="open", nubs=(0, 0)),
+        dict(w=24, h=30, flare=0.82, dome=1.06, eye_dy=0.8, nubs=(0, 0)),
         dict(w=32, h=21, flare=1.06, eye_dy=0.6, nubs=(1, 1)),
-        dict(w=31, h=25, nubs=(1, 1)),
+        dict(w=31, h=25),
     ],
     "idle": [
         dict(w=31, h=25),
@@ -372,7 +392,7 @@ def in_game_preview(out):
     seq 每项是 (clip, i, wall)；wall=True 的格子会在碰撞盒右边界外贴一块墙 —— 用来肉眼验
     贴墙压平有没有真的收进盒内。墙必须先画、帧后贴，否则墙会把越界的部分盖掉，预览就白做了。"""
     seq = [(c, i, False) for c, i in
-           [("wake", i) for i in range(8)]
+           [("wake", i) for i in range(12)]
            + [("idle", i) for i in range(8)] + [("run", i) for i in range(6)]] + [
         ("jump", 1, False), ("jump_straight", 0, False), ("jump_straight", 1, False),
         ("fall", 1, False), ("land", 0, False),

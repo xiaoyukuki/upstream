@@ -45,9 +45,10 @@ const DEATH_SHRINK_SPAN: float = 0.6
 ## g/b 抬得比 r 多，于是那一下读作泛起祭坛核心的青色，而不是整只变白。
 const GRANT_GLOW: Color = Color(1.0, 1.22, 1.35, 1.0)
 
-## 开局苏醒那一拍多长（D57）。wake 剪辑 8 帧 / 7fps = 1.143 s，取 1.15 覆盖到状态机
-## 换回 idle 的那一帧 —— 与 LAND_CLIP_SECONDS 同一口径：窗口比剪辑略长，交接处才不露接缝。
-const WAKE_SECONDS: float = 1.15
+## 开局苏醒那一拍多长（D57 立、D58 重做）。wake 剪辑 12 帧 / 5fps = 2.40 s，取 2.45 覆盖到
+## 状态机换回 idle 的那一帧 —— 与 LAND_CLIP_SECONDS 同一口径：窗口比剪辑略长，交接处才不露接缝。
+## 这 2.45 s 里方向 / 跳跃 / 蹲伏全不响应（D58 裁定 C1：整段掐输入，不做"按下即提前结束"）。
+const WAKE_SECONDS: float = 2.45
 
 @export_group("Horizontal")
 @export var move_speed: float = 260.0

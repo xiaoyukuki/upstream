@@ -12,8 +12,9 @@ extends Node2D
 ## 5. 底边是波浪不是直线，且任何一列都不越过脚底基线（脚底对齐是美术与碰撞的契约）；
 ## 6. 推墙时贴墙一侧压平到碰撞盒边界（D23：墙侧越界 = 0），且同样是纯表现。
 ## 另外第 3 组守两条几何底线：站姿轮廓宽 > 高（要的是「扁」），最宽帧不挤 40 px 最小门洞。
-## 第 11 组钉开局那一拍（D57）：苏醒窗口里皮只能是 wake，方向键/下键/跳跃一律掐掉，
+## 第 11 组钉开局那一拍（D57 立、D58 换皮）：苏醒窗口里皮只能是 wake，方向键/下键/跳跃一律掐掉，
 ## 窗口到点自己把移动锁还回来 —— 锁只由 begin_wake 挂、由窗口收，别处不该碰它。
+## 这一组刻意不钉时长：D58 把这一拍从 1.15 s 改成 2.45 s，钉帧数的断言会随每次改帧表漂。
 ##
 ## 落地相关的断言一律「等到 is_on_floor 再往后 1~2 帧」而不是数固定帧数：
 ## land 剪辑窗口只有 0.2s，靠估时间会漂。
@@ -108,7 +109,7 @@ func _run() -> void:
 		"wall_press_in": [2, false], "wall_press": [2, true], "wall_press_out": [2, false],
 		# 开局苏醒（D57）：8 帧不循环。挂在这里顺带被第 3 组的「全剪辑最宽 ≤36 px」扫到 ——
 		# 摊平那几帧最宽，正是那条门洞约束该管的东西。
-		"wake": [8, false],
+		"wake": [12, false],
 	}
 	for clip in expected.keys():
 		var want: Array = expected[clip]
@@ -411,7 +412,7 @@ func _run() -> void:
 		"起身后脚底仍在 +%.0f（实际 %.2f）" % [Player.COLLISION_HALF_HEIGHT, _foot_local()])
 	_check(_sprite.animation == &"idle", "起身后回 idle（实际 %s）" % _sprite.animation)
 
-	print("[sprite_selftest] 11. 开局苏醒那一拍（D57：皮不许说谎，窗口到点自己撒手）")
+	print("[sprite_selftest] 11. 开局苏醒那一拍（D57 立 / D58 换皮：皮不许说谎，窗口到点自己撒手）")
 	_player.velocity = Vector2.ZERO
 	_player.global_position = Vector2(200.0, -Player.COLLISION_HALF_HEIGHT)
 	await _step(6)
@@ -438,12 +439,18 @@ func _run() -> void:
 	_check(_player.is_on_floor() and absf(_player.velocity.y) < 1.0,
 		"窗口内按跳跃不起跳（on_floor=%s vy=%.1f）" % [_player.is_on_floor(), _player.velocity.y])
 	Input.action_release(&"move_right")
-	# 窗口 1.15s ≈ 69 物理帧，上面已吃掉十几帧。这里刻意多等到富余而不是掐准：
-	# 掐准的帧数会随 WAKE_SECONDS 或剪辑帧表任何一次改动就漂，那是断言在钉常数而不是钉行为。
-	await _step(70)
+	# 等窗口自己撒手：**轮询到点为止**（带上限防死等），不掐固定帧数 —— D58 把这一拍从
+	# 1.15 s 改成 2.45 s，上一版那个 `_step(70)` 就会因为"剪辑变长"而假红。掐准的帧数
+	# 钉的是常数，不是行为（D53 同一条口径）。
+	var waited := 0
+	while _player.is_waking() and waited < 400:
+		await _step(1)
+		waited += 1
+	_check(waited < 400, "苏醒窗口在 400 物理帧内自己走完（实际等了 %d 帧）" % waited)
 	_check(not _player.is_waking(), "窗口过后苏醒结束")
 	_check(not _player.movement_locked,
 		"窗口过后自动把移动锁还回来（实际 locked=%s）" % _player.movement_locked)
+	await _step(2)   # 皮慢一帧（同上面那条）：窗口刚关就读皮会读到 wake 的末帧
 	_check(_sprite.animation == &"idle", "wake 末帧交回后回 idle（实际 %s）" % _sprite.animation)
 	# 醒过一次就是醒着的人：存档点复活不该再躺一遍，也不该把窗口里的锁留在身上。
 	_player.begin_wake()
