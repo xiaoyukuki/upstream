@@ -60,7 +60,8 @@ func claim() -> void:
 	queue_redraw()
 
 
-## 熄灭：让位给更新的存档点。回 idle 皮不是坏了，是它在说实话（D51）。
+## 熄灭：让位给更新的存档点，**或**让位给祭坛那一格（D62 —— 那条路上全场一台都不亮，
+## 且不会有人来补点亮它，这是裁定不是漏做）。回 idle 皮不是坏了，是它在说实话（D51）。
 func release() -> void:
 	if not is_active:
 		return
