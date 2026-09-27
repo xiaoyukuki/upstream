@@ -88,7 +88,8 @@ const EXPORTS := {
 	"res://scenes/objects/button_plate/button_plate.gd": ["width", "sensor_height", "press_depth"],
 	"res://scenes/objects/pendulum/pendulum.gd": ["amplitude_degrees", "period", "phase", "rod_length"],
 	"res://scenes/objects/moving_block/moving_block.gd": ["travel_offset", "block_size", "travel_speed", "block_color"],
-	"res://scenes/objects/piston_block/piston_block.gd": ["travel_offset", "block_size", "extend_speed", "retract_speed", "trigger"],
+	"res://scenes/objects/piston_block/piston_block.gd": ["travel_offset", "block_size",
+		"extend_speed", "retract_speed", "triggers"],
 	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "grant_time"],
 	"res://scenes/objects/sensor_zone/sensor_zone.gd": ["width", "height", "band_centre_y", "visible_in_game"],
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
@@ -196,8 +197,8 @@ func _initialize() -> void:
 				if level.get_node_or_null(NodePath(child_path)) == null:
 					_fail("missing node %s/%s" % [path, child_path])
 		_check_level_contract(level, path)
-		_doors_checked += _check_trigger_wiring(level, path, DOOR_SCRIPT, "门")
-		_pistons_checked += _check_trigger_wiring(level, path, PISTON_SCRIPT, "活塞")
+		_doors_checked += _check_trigger_wiring(level, path, DOOR_SCRIPT, "门", "trigger")
+		_pistons_checked += _check_trigger_wiring(level, path, PISTON_SCRIPT, "活塞", "triggers")
 		_fallzones_checked += _count_by_script(level, FALLZONE_SCRIPT)
 		_check_level_hazards(level, path)
 		_check_key_wiring(level, path)
@@ -1061,9 +1062,12 @@ func _count_by_script(node: Node, target: String) -> int:
 ## 判据是信号名不是类型，与构件内部同一口径。
 ## 与"一卡一门"那条**相反**：这里刻意允许多个构件指同一个触发源 —— 那正是"一组活塞"的写法，
 ## 查重会把 D49 直接判死，所以这条扫描只查"接没接上"，不查"接了几家"。
+## D60 起活塞那一头是**一列**（`triggers`，多台 OR），门还是单值（`trigger`）：两种形状走同一条
+## 判据，逐个查"解析得动 + 发 pressed_changed"。整列留空仍算漏接头，与旧的单值同一条口径。
 ## 刻意不走 get_node：实测未进树的实例里 `get_node("Objects/Door")` 这种两段路径会返回
 ## null（同层单段却正常），所以自己把 path→node 收成字典，用同一套拼法查。
-func _check_trigger_wiring(root: Node, path: String, kit_script: String, label: String) -> int:
+func _check_trigger_wiring(root: Node, path: String, kit_script: String, label: String,
+		prop: String) -> int:
 	var by_path := {}
 	_collect_paths(root, "", by_path)
 	var checked := 0
@@ -1073,13 +1077,19 @@ func _check_trigger_wiring(root: Node, path: String, kit_script: String, label: 
 		if script == null or script.resource_path != kit_script:
 			continue
 		checked += 1
-		var target := _fold_rel_path(node_path, node.get("trigger"))
-		if target == "":
-			_fail("%s %s 的 trigger 是空的" % [label, node_path])
-		elif not by_path.has(target):
-			_fail("%s %s 的 trigger 指向不存在的节点 %s" % [label, node_path, target])
-		elif not by_path[target].has_signal("pressed_changed"):
-			_fail("%s %s 的 trigger %s 不发 pressed_changed" % [label, node_path, target])
+		var raw: Variant = node.get(prop)
+		var listed: Array = raw if raw is Array else [raw]
+		if listed.is_empty():
+			_fail("%s %s 的 %s 是空的" % [label, node_path, prop])
+		for rel in listed:
+			var target := _fold_rel_path(node_path, rel)
+			if target == "":
+				_fail("%s %s 的 %s 里有一格是空的（编辑器里画不出线、运行时也不参与合成）"
+					% [label, node_path, prop])
+			elif not by_path.has(target):
+				_fail("%s %s 的 %s 指向不存在的节点 %s" % [label, node_path, prop, target])
+			elif not by_path[target].has_signal("pressed_changed"):
+				_fail("%s %s 的 %s %s 不发 pressed_changed" % [label, node_path, prop, target])
 	return checked
 
 

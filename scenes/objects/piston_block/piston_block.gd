@@ -33,8 +33,17 @@ extends CharacterBody2D
 ## 状态起步会把整段位移原样退回来 —— 活塞一辈子钻不出洞口。代价是一条摆放约束（手册 §5）：
 ## 行程扫过的那条带子里，除了洞口那一截，不许有地形。
 ##
-## 接线写在块上（同门的口径）：把按钮拖进 `trigger` 就完了。**多块指同一个按钮是合法的**，
-## 那正是"一组"的写法 —— 与"一卡一门"那条相反，这里刻意不查重。
+## 接线写在块上（同门的口径）：把按钮拖进 `triggers` 就完了。**两个方向的多对一都合法**：
+## 多块指同一个按钮（D49，那正是"一组"的写法），一块指多台按钮（D60）。与"一卡一门"那条
+## 相反，这里两头都刻意不查重 —— 查重等于把"一组"和"多台都能推"两种摆法都判死。
+##
+## 多台的合成口径是 **OR**：任一台按下就伸出，**全部**松开才收回（裁定 D60①A）。这条不是
+## 顺手写的：接第二台的时候如果沿用"信号里直接写 `is_out`"那种最后一条说了算的写法，
+## A 踩着、B 松开的那一瞬间这块会当着人的面缩回去。所以聚合只有一个来源（`_reresolve()`），
+## 它读各源**当前的** `is_pressed` 而不是事件历史 —— 一台被拆走（`queue_free` 之后不再有信号）
+## 时它会自己从聚合里掉出去，而事件历史版会永远停在"按下"那一档。
+## 代价是触发源的契约从"发 `pressed_changed`"变成"发信号 **且** 暴露 `is_pressed`"
+## （`ButtonPlate` / `SensorZone` 两条都本来就满足；缺后一条的源在进树时打警告，不静默当没踩着）。
 ##
 ## 皮肤是 `_draw()` 画出来的，不是贴图：`block_size` 是导出量，固定尺寸的 PNG 在改边长时会糊；
 ## 而过程化绘制里所有数字都按"沿行程轴那一边 / 垂直那一边"走，改边长等于整张皮跟着缩放。
@@ -42,7 +51,7 @@ extends CharacterBody2D
 ## 冻结格、那扇青门共用一套青与亮白 —— 见下面那组常量。
 ##
 ## @tool：编辑器里不跑位移（跑了会把 position 写进场景，下次装载就漂了），改为画出满行程的
-## 方块轮廓、行程线，以及一条连到触发源的线 —— 摆图时一眼看出哪块没接头。
+## 方块轮廓、行程线，以及**每个触发源各一条**连过去的线 —— 摆图时一眼看出哪块没接头。
 
 ## 全行程用时与终点相对原点的偏移。只认主轴那一维，见文件头。
 @export var travel_offset: Vector2 = Vector2(64.0, 0.0):
@@ -62,15 +71,17 @@ extends CharacterBody2D
 ## 收回速度（px/s，世界时间）。站得住的时长就是"伸出长度 ÷ 这个数"。
 @export var retract_speed: float = 240.0
 
-## 驱动这块的触发源：指向任意带 `pressed_changed(pressed: bool)` 信号的节点（ButtonPlate、
-## SensorZone 都算）。用 NodePath 而不是 `export(Node)` 的理由与门同条：实测 .tscn 里给 Node
-## 槽写路径，游戏进程 instantiate 后读回来是 null。留空 = 由关卡脚本调 `set_out()` 驱动。
-@export_node_path var trigger: NodePath:
+## 驱动这块的触发源：任意带 `pressed_changed(pressed: bool)` 信号的节点（ButtonPlate、
+## SensorZone 都行），填多少台都可以，合成的口径是 OR（任一台按下就伸出，全松开才收回，D60）。
+## 用 NodePath 而不是 `export(Array[Node])` 的理由与门同条：实测 .tscn 里给 Node 槽写路径，
+## 游戏进程 instantiate 后读回来是 null。整列留空 = 由关卡脚本调 `set_out()` 驱动。
+@export var triggers: Array[NodePath] = []:
 	set(value):
-		trigger = value
-		_reconnect_trigger()
+		triggers = value
+		_reconnect_triggers()
 
-## 当前该伸出还是该缩回。由触发源写，位置只跟它走。
+## 当前该伸出还是该缩回。接了源的块由 `_refresh_out()` 从各源状态合成，这里只是它落地的地方；
+## 位置只跟它走。
 var is_out: bool = false
 
 var _anchor: Vector2
@@ -81,8 +92,13 @@ var _axis: Vector2 = Vector2.ONE
 var _span: float = 64.0
 ## 方块沿行程轴的半长。原点在前缘，所以身子整块在 -_unit 方向上。
 var _half: float = 32.0
-var _bound: Node
-var _link_end: Vector2 = Vector2.INF
+## 当前接上的那些源（已去重，顺序照 `triggers`）。聚合只读这一列，于是"接了几条信号"与
+## "一次按下算几家"用的是同一份名单，不会出现两台之间的隐形差别。
+var _bound: Array[Node] = []
+## 每台源最后一次报上来的布尔量。**存的是各源各自的状态而不是一个总开关**：OR 要能在
+## "A 踩着、B 松开"那一瞬仍然伸出，就必须知道 A 还踩着。
+var _state := {}
+var _link_ends: Array[Vector2] = []
 ## 运动线索（洞口那两枚短线）当前画不画。缓存成字段而不是在 `_draw` 里读 delta：
 ## 冻结那一拍 `_physics_process` 整条早退，不在早退前过一遍这个判断，线索就会留在一张已经钉住的画面上。
 var _ticks: bool = false
@@ -116,7 +132,7 @@ func _ready() -> void:
 	_refresh()
 	# 取全局锚点：方块经常放在带偏移的房间节点下，本地坐标配全局坐标会整体偏一个父级偏移。
 	_anchor = global_position
-	_reconnect_trigger()
+	_reconnect_triggers()
 	if Engine.is_editor_hint():
 		return
 	var ignored: float = maxf(absf(travel_offset.x) + absf(travel_offset.y) - _span, 0.0)
@@ -299,50 +315,96 @@ func _draw_editor_guides() -> void:
 	draw_line(Vector2.ZERO, end, line_color, 2.0)
 	draw_circle(Vector2.ZERO, 5.0, line_color)
 	draw_rect(rect_at(end), line_color, false, 1.0)
-	var source: Node = _trigger_source()
-	if source == null:
-		return
-	var point := to_local(source.global_position)
-	_link_end = point
-	draw_line(Vector2.ZERO, point, LINK_COLOR, 2.0)
-	draw_circle(point, 5.0, LINK_COLOR)
+	for point in _link_points():
+		draw_line(Vector2.ZERO, point, LINK_COLOR, 2.0)
+		draw_circle(point, 5.0, LINK_COLOR)
+
+
+## 每台源一条橙线。这一份几何同时是 `_poll_link_line()` 比较的对象 —— 画与"要不要重画"共用
+## 一个来源，所以挪按钮时不会出现"线留在旧位置"那种半更新。
+func _link_points() -> Array[Vector2]:
+	var points: Array[Vector2] = []
+	for source in _sources():
+		points.append(to_local(source.global_position))
+	return points
 
 
 ## 换触发源必须先解掉旧连接（同门）：留着老按钮照样能推这块，而场景里已经看不出接在哪儿。
-func _reconnect_trigger() -> void:
+## 多台时这条更要紧 —— 少解一台就是场上多一个隐形开关。
+func _reconnect_triggers() -> void:
 	if Engine.is_editor_hint():
-		queue_redraw() # 编辑器里只需要重画那条辅助线，不接信号
+		queue_redraw() # 编辑器里只需要重画那些辅助线，不接信号
 		return
-	var next: Node = _trigger_source()
-	if _bound != null and is_instance_valid(_bound):
-		_bound.disconnect(TRIGGER_SIGNAL, _on_trigger_pressed_changed)
-	_bound = null
-	if next == null:
-		return
-	if not next.has_signal(TRIGGER_SIGNAL):
-		push_warning("活塞 %s 的 trigger %s 不发 %s，这块永远不会伸出来" % [
-			name, str(trigger), TRIGGER_SIGNAL])
-		return
-	next.connect(TRIGGER_SIGNAL, _on_trigger_pressed_changed)
+	var next: Array[Node] = []
+	for path in triggers:
+		var source: Node = _source_at(path)
+		if source == null:
+			continue
+		if not source.has_signal(TRIGGER_SIGNAL):
+			push_warning("活塞 %s 的 trigger %s 不发 %s，这台不参与合成" % [
+				name, str(path), TRIGGER_SIGNAL])
+			continue
+		if not next.has(source):
+			next.append(source)	# 同一台在列表里写两遍只算一家，否则一次按下会被接两次
+	for prev in _bound:
+		if not next.has(prev):
+			_unbind(prev)
 	_bound = next
+	for source in next:
+		var hooked := _on_source_changed.bind(source)
+		if source.is_connected(TRIGGER_SIGNAL, hooked):
+			continue	# 同一个源第二次被指到（列表里写了两遍，或改了列表但没换人）：不重复接
+		source.connect(TRIGGER_SIGNAL, hooked)
+		# 种子读各源当前的布尔量：只吃边沿的话，"进树时就已经踩着"的那台永远不算数。
+		# 走 `get()` 而不是 `source.is_pressed`：契约只保证信号，属性名写死会让静态类型这里就编译不过。
+		var flag: Variant = source.get(&"is_pressed")
+		_state[source] = bool(flag) if flag != null else false
+	_refresh_out()
 
 
+func _unbind(source: Node) -> void:
+	if not is_instance_valid(source):
+		_state.erase(source)	# 键是已释放的对象，留着它就是一格永远读不到的僵尸状态
+		return
+	source.disconnect(TRIGGER_SIGNAL, _on_source_changed.bind(source))
+	_state.erase(source)
+
+
+## 列表里所有还解析得动的源。画线与接线都走它，所以"看到几条线"与"合成算几家"必然同源。
 ## 路径是相对本节点的，所以必须进树之后才解析得动。
-func _trigger_source() -> Node:
-	if trigger.is_empty() or not is_inside_tree():
+func _sources() -> Array[Node]:
+	var out: Array[Node] = []
+	for path in triggers:
+		var source: Node = _source_at(path)
+		if source != null and not out.has(source):
+			out.append(source)
+	return out
+
+
+func _source_at(path: NodePath) -> Node:
+	if path.is_empty() or not is_inside_tree():
 		return null
-	return get_node_or_null(trigger)
+	return get_node_or_null(path)
 
 
-func _on_trigger_pressed_changed(pressed: bool) -> void:
-	set_out(pressed)
+## OR 合成：任一台按下就伸出，全部松开才收回。信号只负责"有一家的状态变了"，
+## 真值一律从 `_state` 现算 —— 所以谁先谁后、同一拍里几台一起变，结果都一样。
+func _on_source_changed(pressed: bool, source: Node) -> void:
+	_state[source] = pressed
+	_refresh_out()
+
+
+func _refresh_out() -> void:
+	var any := false
+	for source in _bound:
+		if is_instance_valid(source) and bool(_state.get(source, false)):
+			any = true
+			break
+	is_out = any
 
 
 func _poll_link_line() -> void:
-	var source: Node = _trigger_source()
-	if source == null:
-		return
-	var point := to_local(source.global_position)
-	if point != _link_end:
-		_link_end = point
+	var points: Array[Vector2] = _link_points()
+	if points != _link_ends:
+		_link_ends = points
 		queue_redraw()

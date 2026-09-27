@@ -804,12 +804,14 @@ func _afterimage_layers(rungs: Array, active: int, want_solid: bool) -> bool:
 	return true
 
 
-## 第 13 组：活塞踏板（D49）。四档各钉一条"改坏了不会响、只有试玩才露馅"的：
+## 第 13 组：活塞踏板（D49）。五档各钉一条"改坏了不会响、只有试玩才露馅"的：
 ## a) 一组两块接同一个按钮（多对一合法），冻结即停在当前伸出量上、松开只记意图；
 ## b) 收回明显快过伸出 —— 伸得慢到踩按钮的人跟得上，收得快到站不住；
 ## c) 收回把落脚点从脚下抽干：人自己掉回地面，不是被方块带着沉进地里；
 ## d) 行程上有人就**挤开**他；他背后有墙则他自己被挡住、方块跟着停在接触面上走不满行程，
 ##    且顶住期间不攒位移（脱困那一帧不会攒出一发弹射）。
+## e) 一块接两台按钮（D60）：合成是 OR —— 任一台按下就伸出，**全**松开才收回。这一档存在的理由
+##    是那条最省事的写法（把信号参数直接抄进 `is_out`）：A 还踩着、B 一松就把人脚下的路抽掉。
 func _test_piston() -> void:
 	# 活塞靠 player 组找人推，前面几组留一个人在树上就是替错的人做测试 —— 先点破再往下跑。
 	var leftovers := get_tree().get_nodes_in_group(&"player")
@@ -824,10 +826,11 @@ func _test_piston() -> void:
 	rig.name = "PistonRig"
 	add_child(rig)
 	var plate := _plate_instance(rig, "Plate", Vector2(5000.0, -400.0))
-	var wall := _piston_instance(rig, plate, "Wall", Vector2(5000.0, -32.0), Vector2(64.0, 0.0))
-	var twin := _piston_instance(rig, plate, "Twin", Vector2(5000.0, -200.0), Vector2(64.0, 0.0))
+	var wall := _piston_instance(rig, [plate], "Wall", Vector2(5000.0, -32.0), Vector2(64.0, 0.0))
+	var twin := _piston_instance(rig, [plate], "Twin", Vector2(5000.0, -200.0), Vector2(64.0, 0.0))
 	_check("两块活塞接到同一个按钮（「一组」就是多对一，刻意不查重）",
-		wall._bound == plate and twin._bound == plate)
+		wall._bound.size() == 1 and wall._bound[0] == plate
+		and twin._bound.size() == 1 and twin._bound[0] == plate)
 	plate._set_pressed(true)
 	_check("按钮一踩两块同时转入伸出", wall.is_out and twin.is_out)
 	await _frame(10)
@@ -878,7 +881,7 @@ func _test_piston() -> void:
 	rig2.name = "RiserRig"
 	add_child(rig2)
 	var plate2 := _plate_instance(rig2, "Plate2", Vector2(5300.0, -400.0))
-	var riser := _piston_instance(rig2, plate2, "Riser", Vector2(5300.0, 0.0), Vector2(0.0, -64.0))
+	var riser := _piston_instance(rig2, [plate2], "Riser", Vector2(5300.0, 0.0), Vector2(0.0, -64.0))
 	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
 	hero.position = Vector2(5300.0, -Player.COLLISION_HALF_HEIGHT)
 	add_child(hero)
@@ -919,7 +922,7 @@ func _test_piston() -> void:
 	rig3.name = "PushRig"
 	add_child(rig3)
 	var plate3 := _plate_instance(rig3, "Plate3", Vector2(5500.0, -400.0))
-	var pusher := _piston_instance(rig3, plate3, "Pusher",
+	var pusher := _piston_instance(rig3, [plate3], "Pusher",
 		Vector2(5500.0, -32.0), Vector2(64.0, 0.0))
 	hero.global_position = Vector2(5545.0, -Player.COLLISION_HALF_HEIGHT)
 	await _frame(2)
@@ -961,6 +964,45 @@ func _test_piston() -> void:
 
 	hero.queue_free()
 	rig3.queue_free()
+	await _frame(2)
+
+	# —— e：一台活塞接两台按钮（D60 多台 OR 合成）。这一档钉的是"最后一个信号说了算"那个
+	##    最容易写出来的错版本：A 还踩着、B 一松就缩。——
+	var rig4 := Node2D.new()
+	rig4.name = "MultiRig"
+	add_child(rig4)
+	var plate_a := _plate_instance(rig4, "PlateA", Vector2(5700.0, -400.0))
+	var plate_b := _plate_instance(rig4, "PlateB", Vector2(5760.0, -400.0))
+	var multi := _piston_instance(rig4, [plate_a, plate_b], "Multi",
+		Vector2(5700.0, -32.0), Vector2(64.0, 0.0))
+	_check("两台按钮都接进来了（_bound 是列表）", multi._bound.size() == 2)
+	_check("都没踩 → 不伸出", not multi.is_out)
+	plate_a._set_pressed(true)
+	_check("A 踩下即伸出", multi.is_out)
+	plate_b._set_pressed(true)
+	_check("B 也踩下，仍然伸出", multi.is_out)
+	plate_a._set_pressed(false)
+	_check("A 松开而 B 还踩着 → 不许缩（这一条杀掉「最后一个信号说了算」）", multi.is_out)
+	plate_b._set_pressed(false)
+	_check("两台全松开才收回", not multi.is_out)
+	var dup: Array[NodePath] = [NodePath("../PlateA"), NodePath("../PlateA")]
+	multi.triggers = dup
+	_check("同一台按钮填两格只算一台（列内查重）", multi._bound.size() == 1)
+	plate_a._set_pressed(true)
+	_check("查重之后照样驱动得动", multi.is_out)
+	var left: Array[NodePath] = [NodePath("../PlateB")]
+	multi.triggers = left
+	_check("A 还踩着但已出列 → 不再由它伸出（换列时按当前值重算，不留在旧结论上）", not multi.is_out)
+	plate_b._set_pressed(true)
+	_check("留在列里的那台照样能驱动", multi.is_out)
+	plate_b._set_pressed(false)
+	_check("A 还踩着却已出列：B 一松就收回（出列的那台不参与合成）", not multi.is_out)
+	# 触发源在活塞进树**之前**就已按下：连接时读一次 `is_pressed` 兜种，不该漏成"没踩"。
+	plate_a._set_pressed(true)
+	var seeded := _piston_instance(rig4, [plate_a], "Seeded",
+		Vector2(5800.0, -32.0), Vector2(64.0, 0.0))
+	_check("已按下的触发源：起手就是伸出态（读当前值而不是等信号）", seeded.is_out)
+	rig4.queue_free()
 	TimeManager.reset_state()
 	# 等这一组的人真的离树：第 14 组要用 get_first_node_in_group 挑玩家，留着他把回灌做在错的人身上。
 	await _frame(2)
@@ -1555,8 +1597,9 @@ func _plate_instance(rig: Node, node_name: String, at: Vector2) -> ButtonPlate:
 
 ## 活塞 fixture。速度与参照档位在这里钉死，不跟脚本默认值走（同 `_afterimage_instance` 的理由：
 ## 那几个数归摆图的人随时调，照默认值断言"伸出约 36 拍 / 收回约 9 拍"第二天就会红）。
-## `trigger` 用相对路径且在进树前赋好：`_ready()` 里那次 `_reconnect_trigger()` 才解析得动。
-func _piston_instance(rig: Node, source: ButtonPlate, node_name: String,
+## `sources` 是一列（D60 起一块可以指多台，OR 合成），相对路径且在进树前赋好：
+## `_ready()` 里那次 `_reconnect_triggers()` 才解析得动。
+func _piston_instance(rig: Node, sources: Array, node_name: String,
 		at: Vector2, travel: Vector2) -> PistonBlock:
 	var piston := load("res://scenes/objects/piston_block/piston_block.tscn") \
 		.instantiate() as PistonBlock
@@ -1565,7 +1608,10 @@ func _piston_instance(rig: Node, source: ButtonPlate, node_name: String,
 	piston.travel_offset = travel
 	piston.extend_speed = 128.0
 	piston.retract_speed = 512.0
-	piston.trigger = NodePath("../" + String(source.name))
+	var listed: Array[NodePath] = []
+	for source in sources:
+		listed.append(NodePath("../" + String((source as Node).name)))
+	piston.triggers = listed
 	rig.add_child(piston)
 	return piston
 
