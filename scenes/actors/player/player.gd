@@ -50,6 +50,25 @@ const GRANT_GLOW: Color = Color(1.0, 1.22, 1.35, 1.0)
 ## 这 2.45 s 里方向 / 跳跃 / 蹲伏全不响应（D58 裁定 C1：整段掐输入，不做"按下即提前结束"）。
 const WAKE_SECONDS: float = 2.45
 
+## 能力获取那一拍的**帧数**（D61）。时长不住在这儿：`begin_grant()` 的 duration 由
+## `AbilityAltar.grant_time` 给（与 `die()` 同一条规矩，一个数只住一处）。帧数必须在这儿，
+## 因为下面三张表全是按帧标的，而皮（`grant` 剪辑 16 帧 / 3.2 fps）、举升曲线、光柱行程、
+## 祭坛那三枚环共用同一个"第几帧"。对不上就是"画面在演另一拍"，账由 kit_selftest 第 20 组钉。
+const GRANT_FRAMES: int = 16
+## 爆发那一帧：核心进胸、光柱铺满、青环散开、世界被钉住，四件事同一帧。
+const GRANT_BURST_FRAME: int = 9
+## 钉住世界多少帧（A3 裁定：约 1.25 s）。窗口是 [9, 9+4) 四帧。
+const GRANT_PIN_FRAMES: int = 4
+## 每帧脚底离出发点的高度（世界 px，向上为正）。0..2 被拽起来、3..8 在半空悬着、
+## 9 爆发那一帧再窜一下（48 = 整场最高点）、10..12 落回地面、13 开心得又弹 10 px。
+## 选型图 `tools/gen_grant_preview.py` 里的 LIFT 是同一串数（那边逐帧摆位、这边按帧线性插值，
+## 帧时刻上两边走到同一个高度）。
+const GRANT_LIFT: PackedFloat32Array = [0.0, 22.0, 44.0, 48.0, 48.0, 47.0, 46.0, 44.0,
+	40.0, 48.0, 46.0, 30.0, 0.0, 10.0, 0.0, 0.0]
+## 胸口所在那条线（玩家原点上方 3 px）。祭坛那枚核心飞进的就是这里、三枚环也从这里散、
+## 光柱的顶点同样钉在这里 —— 三个"这里"必须是同一个数，所以常量住在被引用的这一边。
+const CHEST_Y: float = -3.0
+
 @export_group("Horizontal")
 @export var move_speed: float = 260.0
 @export var ground_acceleration: float = 2600.0
@@ -103,12 +122,25 @@ var _buffer_remaining: float = 0.0
 ## 一次性演出走引擎固定步长（玩家本就豁免时停，这里的 delta 就是物理步），
 ## 不吃门控 delta —— 否则"演到一半被按方向键冻住"正是玩家看见的第一个 bug。
 var _wake_remaining: float = 0.0
+## 能力获取那一拍还剩多久 / 总长（D61）。与 `_wake_remaining` 同一口径：吃引擎固定步长，
+## 不吃门控 delta —— 这一拍自己就要把世界钉住，若跟着世界那道闸走会卡在半途。
+var _grant_remaining: float = 0.0
+var _grant_total: float = 1.0
+## 已经**真的**举起来多高（世界 px）。与曲线值分开存：撞了天花板就只有这一段是真的，
+## 于是"被压住"这件事不需要第二个状态量，曲线下来时他照样下来。
+var _grant_lifted: float = 0.0
+## 钉住世界那道闸现在开着吗。边沿才动手，避免每帧都去写 TimeManager。
+var _grant_pinned: bool = false
 var _was_on_floor: bool = false
 ## 能力入体那一拍的提亮还剩多久（D44）。总长单独存一份是为了把亮度归一化到 0~1 再衰减。
 var _grant_glow: float = 0.0
 var _grant_glow_total: float = 1.0
 
 @onready var _visual: Node2D = $Visual
+## 能力获取那一拍的光柱（D61）。刻意在代码里造、不进 player.tscn：它没有一颗旋钮需要在编辑器
+## 里摆（形状全是脚本常量 + 每帧 `_draw`），而"画在身体背后"这件事排到 Visual 之前就够了。
+## 也不挂 Visual 底下：那份变换正被死亡那一拍缩着（D42），光柱不该跟着一起缩。
+var _grant_beams: GrantBeams
 ## 死亡那一拍的液滴（D42）。排在 Visual 之后 = 画在身体之上；挂在 Player 而不是 Visual
 ## 之下，是因为 Visual 正被演出缩着，液滴不该跟着一起缩。
 @onready var _death_burst: DeathBurst = $DeathBurst
@@ -145,6 +177,11 @@ func _ready() -> void:
 	var self_rid: Array[RID] = []
 	self_rid.append(get_rid())
 	_probe.exclude = self_rid
+	_grant_beams = GrantBeams.new()
+	_grant_beams.source = self
+	add_child(_grant_beams)
+	# 排在 Visual 之前 = 画在身体背后：光柱的顶点钉在胸口，画在人前面会把整张脸糊掉。
+	move_child(_grant_beams, _visual.get_index())
 
 
 func _physics_process(delta: float) -> void:
@@ -169,10 +206,17 @@ func _physics_process(delta: float) -> void:
 			movement_locked = false
 	_coyote_remaining = maxf(0.0, _coyote_remaining - delta)
 	_buffer_remaining = maxf(0.0, _buffer_remaining - delta)
+	# 能力获取那一拍（D61）：位置、世界那道闸、演出时钟全由这一拍自己接管，下面每一段
+	# 都默认「这是一个还活着、且归他自己控制的人在动」。放在两条计时之后是因为缓冲区
+	# 也要照常衰减 —— 否则这一拍里按过跳跃的人会在拿到控制权那一帧莫名其妙弹一下。
+	if _grant_remaining > 0.0:
+		_advance_grant(delta)
+		return
 
 	if Input.is_action_just_pressed(&"jump"):
 		_buffer_remaining = jump_buffer_time
-	is_crouch_held = Input.is_action_pressed(&"move_down") and not is_waking()
+	is_crouch_held = (Input.is_action_pressed(&"move_down")
+		and not is_waking() and not is_granting())
 	# 必须在 _try_jump() 之前：被压住时能不能起跳取决于这一帧的判定结果。
 	_update_crouch()
 
@@ -201,12 +245,94 @@ func is_waking() -> bool:
 	return _wake_remaining > 0.0
 
 
+## 能力获取那一拍（D61）：踩上祭坛那一帧由 `AbilityAltar` 叫一次，时长就是它那个 `grant_time`
+## （时长只住一处，与 `die()` 同一口径）。整段掐输入走的还是 D41 那把移动锁；除此之外这一拍
+## 还自己管三件事：把人举起来（曲线见 `GRANT_LIFT`）、在爆发那一帧把世界钉住约 1.25 s（A3）、
+## 以及把进度报给光柱与皮。
+func begin_grant(duration: float) -> void:
+	if is_dead:
+		return
+	_grant_total = maxf(duration, 0.001)
+	_grant_remaining = _grant_total
+	_grant_lifted = 0.0
+	_grant_pinned = false
+	movement_locked = true
+
+
+## 皮（`grant` 剪辑）、光柱、青环、守门都读它。与 `death_progress()` / `fly_progress()`
+## 同一口径：-1 = 不在这一拍里。
+func is_granting() -> bool:
+	return _grant_remaining > 0.0
+
+
+## 这一拍走了多少 0..1；-1 表示不在演出中。光柱的行程、旋转与淡出全按它算。
+func grant_progress() -> float:
+	if _grant_remaining <= 0.0:
+		return -1.0
+	return clampf(1.0 - _grant_remaining / _grant_total, 0.0, 1.0)
+
+
+## 与 `_advance_death()` / `_advance_swipe()` 同一形状的计时：吃引擎自己的固定物理步长，
+## 世界那道闸截不到它 —— 这一拍中段的钉住正是它自己钉的，若跟着门控 delta 走就自锁了。
+func _advance_grant(delta: float) -> void:
+	_grant_remaining = maxf(0.0, _grant_remaining - delta)
+	var t: float = 1.0 - _grant_remaining / _grant_total
+	# 水平速度照常摩擦掉（与 `_apply_horizontal` 那把锁走的同一条律）：这一拍里人不横移，
+	# 但不留一条"憋了五秒的满速"等控制权交回来的那一帧突然弹出去。
+	velocity.x = move_toward(velocity.x, 0.0, ground_friction * delta)
+	_apply_grant_lift(t)
+	_apply_grant_pin(t)
+	if _grant_remaining == 0.0:
+		movement_locked = false
+
+
+## 举升：曲线按帧标（`GRANT_LIFT`），帧时刻之间线性插值，所以图里那一帧的高度就是游戏里
+## 那一帧的高度。走 `move_and_collide` 而不是改 `global_position`：头顶有天花板他就撞停，
+## 于是"被压住"这件事不需要第二条判定 —— 撞停的那一段不计进 `_grant_lifted`，
+## 曲线继续往上时他停在原地，曲线下来时他照样下来，不用维护"上限"这种第二个状态。
+func _apply_grant_lift(t: float) -> void:
+	var tf: float = clampf(t, 0.0, 1.0) * float(GRANT_FRAMES)
+	var i: int = clampi(int(tf), 0, GRANT_FRAMES - 1)
+	var want: float = lerpf(GRANT_LIFT[i], GRANT_LIFT[mini(i + 1, GRANT_FRAMES - 1)],
+		tf - float(i))
+	var step: float = want - _grant_lifted
+	if step == 0.0:
+		return
+	var motion := Vector2(0.0, -step)
+	var hit := move_and_collide(motion)
+	if hit != null:
+		motion -= hit.get_remainder()
+	_grant_lifted -= motion.y
+
+
+## 爆发那一帧把世界钉住（A3：约 1.25 s）。钉的是 D42 那把 `set_frozen_override`，
+## 不是能力门控那条意图通道 —— 这一拍要的是"不管他按没按方向键、能力开没开都一定钉住"，
+## 而 CRT 那层灰、`TimeReceiver` 的门控、调试面板全都在同一个事实上自动跟着亮。
+func _apply_grant_pin(t: float) -> void:
+	var tf: float = clampf(t, 0.0, 1.0) * float(GRANT_FRAMES)
+	var want: bool = tf >= float(GRANT_BURST_FRAME) \
+		and tf < float(GRANT_BURST_FRAME + GRANT_PIN_FRAMES)
+	if want == _grant_pinned:
+		return
+	_grant_pinned = want
+	if want:
+		TimeManager.set_frozen_override(true)
+	else:
+		TimeManager.release_frozen_override(input_handler.is_moving)
+
+
 func respawn() -> void:
 	global_position = spawn_point
 	velocity = Vector2.ZERO
 	_coyote_remaining = 0.0
 	_buffer_remaining = 0.0
 	_wake_remaining = 0.0
+	# 这一拍也不带进复活：死了又回存档点的人不该正飘在半空、也不该身上还挂着一把没人收的锁。
+	# 世界那道钉住**不在这里解** —— 走到 respawn 这一拍只可能是"死在演出里"，那道锁归 die()
+	# 与重载时 `TimeManager.reset_state()` 那条链收，这里越权去解就等于替别人撒手。
+	_grant_remaining = 0.0
+	_grant_lifted = 0.0
+	_grant_pinned = false
 	is_crouching = false
 	is_head_blocked = false
 	movement_locked = false

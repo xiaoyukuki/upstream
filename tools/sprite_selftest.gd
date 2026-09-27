@@ -110,6 +110,9 @@ func _run() -> void:
 		# 开局苏醒（D57）：8 帧不循环。挂在这里顺带被第 3 组的「全剪辑最宽 ≤36 px」扫到 ——
 		# 摊平那几帧最宽，正是那条门洞约束该管的东西。
 		"wake": [12, false],
+		# 能力获取那一拍（D61）：16 帧 / 3.2 fps = 5.0 s 整，不循环。同一张时间表还被
+		# Player.GRANT_LIFT 与光柱按帧号读，所以这里的 16 不只是"皮有几张图"。
+		"grant": [16, false],
 	}
 	for clip in expected.keys():
 		var want: Array = expected[clip]
@@ -458,6 +461,86 @@ func _run() -> void:
 	_check(not _player.is_waking() and not _player.movement_locked,
 		"respawn 既不留窗口也不留锁（waking=%s locked=%s）"
 			% [_player.is_waking(), _player.movement_locked])
+
+	print("[sprite_selftest] 12. 能力获取那一拍（D61：举升 + 掐输入 + 爆发那一帧钉住世界）")
+	# 第 11 组收在"刚 respawn 完、还在空中"，这里先把他放回地面并清掉那些状态。
+	_player.velocity = Vector2.ZERO
+	_player.global_position = Vector2(200.0, -Player.COLLISION_HALF_HEIGHT)
+	await _step(6)
+	var origin := _player.global_position
+	_player.begin_grant(5.0)
+	_check(_player.is_granting(), "begin_grant 后进入这一拍")
+	await _step(2)   # 皮慢一帧（同第 11 组那条）
+	_check(_sprite.animation == &"grant", "这一拍里皮是 grant（实际 %s）" % _sprite.animation)
+	var grant_x: float = _player.global_position.x
+	Input.action_press(&"move_right")
+	await _step(5)
+	_check(_sprite.animation == &"grant", "按着方向键也不切 start/run（实际 %s）" % _sprite.animation)
+	_check(is_equal_approx(_player.global_position.x, grant_x),
+		"这一拍里人不横移（x=%.1f）" % _player.global_position.x)
+	_check(_player.movement_locked, "掐输入用的是 D41 那把现成的移动锁")
+	Input.action_release(&"move_right")
+	# 举到爆发那一帧：轮询到 progress 到达 9/16，量的是"比脚底契约高出一截"，不是像素位置。
+	var burst_guard := 0
+	while _player.grant_progress() < float(Player.GRANT_BURST_FRAME) / float(Player.GRANT_FRAMES) \
+			and burst_guard < 400:
+		burst_guard += 1
+		await _step(1)
+	var lift_at_burst: float = origin.y - _player.global_position.y
+	_check(lift_at_burst > 40.0,
+		"爆发那一帧人被举到 %.1f px（曲线值 48）" % lift_at_burst)
+	_check(TimeManager.is_frozen_overridden(), "爆发那一帧世界被钉住（A3）")
+	_check(_sprite.animation == &"grant", "钉住的那一拍里皮照旧是 grant")
+	# 钉住的窗口自己关掉：关掉之后世界必须回到流动 —— 这条不是顺手测测，
+	# 是 D61 踩过的最狠一颗雷：`set_frozen_override(false)` 只清开关不解冻，
+	# 而解冻那条通道在能力没开时整条静音，漏掉就永久冻住。
+	var unpin_guard := 0
+	while TimeManager.is_frozen_overridden() and unpin_guard < 200:
+		unpin_guard += 1
+		await _step(1)
+	_check(not TimeManager.is_frozen_overridden(), "钉住窗口到点自己松开")
+	_check(not TimeManager.is_time_frozen(), "松开后世界回到流动（不是留在 FROZEN 里）")
+	var end_guard := 0
+	while _player.is_granting() and end_guard < 400:
+		end_guard += 1
+		await _step(1)
+	_check(not _player.is_granting(), "整拍在 400 物理帧内自己走完")
+	_check(not _player.movement_locked, "走完自动把移动锁还回来")
+	_check(_player.is_on_floor(), "落回地面（脚底契约没被这一拍带走）")
+	_check(absf(_player.global_position.y - origin.y) < 0.6,
+		"起止同一条地面线（差 %.2f px）" % (_player.global_position.y - origin.y))
+	await _step(2)
+	_check(_sprite.animation == &"idle", "末帧交回后回 idle（实际 %s）" % _sprite.animation)
+	# 头顶有天花板：撞停就行，不许穿过去，也不许从此粘在顶上。
+	var ceil_bottom: float = origin.y - Player.STAND_HEIGHT * 0.5 - 18.0
+	var ceiling := StaticBody2D.new()
+	var cshape := CollisionShape2D.new()
+	var crect := RectangleShape2D.new()
+	crect.size = Vector2(400.0, 40.0)
+	cshape.shape = crect
+	cshape.position = Vector2(200.0, ceil_bottom - 20.0)
+	ceiling.add_child(cshape)
+	add_child(ceiling)
+	_player.begin_grant(5.0)
+	var capped := 0.0
+	var cap_guard := 0
+	while _player.is_granting() and cap_guard < 400:
+		cap_guard += 1
+		await _step(1)
+		capped = maxf(capped, origin.y - _player.global_position.y)
+	_check(capped > 15.0 and capped < 21.0,
+		"头顶被压时停在净空里（最高 %.1f px，净空 18）" % capped)
+	_check(_player.is_on_floor() and absf(_player.global_position.y - origin.y) < 0.6,
+		"曲线下来时他照样下来，没有粘在天花板上")
+	_check(not TimeManager.is_frozen_overridden() and not TimeManager.is_time_frozen(),
+		"撞顶那一跑也把世界解回流动")
+	ceiling.queue_free()
+	# 复活不重演，也不把人留在半空 / 半锁里（与 wake 同一条纪律）。
+	_player.begin_grant(5.0)
+	_player.respawn()
+	_check(not _player.is_granting() and not _player.movement_locked,
+		"respawn 既不留窗口也不留锁（granting=%s locked=%s）"
+			% [_player.is_granting(), _player.movement_locked])
 
 	print("SPRITE SELFTEST DONE failures=%d" % _failures)
 	get_tree().quit(1 if _failures > 0 else 0)

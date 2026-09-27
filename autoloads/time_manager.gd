@@ -46,6 +46,7 @@ func _physics_process(delta: float) -> void:
 ## 钉住 / 松开强制冻结。钉住走的是状态机本身而不是旁路一个布尔 —— 于是灰滤镜、
 ## `TimeReceiver.get_physics_delta()`、调试面板全都自动读到同一个事实。
 ## 松开只清开关：解冻交给下面那条意图通道去做，这一拍结束后紧接着就是重载。
+## 演完还要自己活过来的那种松手（D61 那一拍）用 `release_frozen_override()`，别用这条。
 func set_frozen_override(on: bool) -> void:
 	if not on:
 		_frozen_override = false
@@ -54,6 +55,20 @@ func set_frozen_override(on: bool) -> void:
 	_is_releasing = false
 	_release_remaining = 0.0
 	_set_state(TimeState.FROZEN)
+
+
+## 松开钉住并且**当场把状态接回正常**（D61）。与 `set_frozen_override(false)` 的区别是这条
+## 有后继动作：那一条是给死亡那一拍用的（松完紧接着换场景，新关卡的 `reset_state()` 收尾），
+## 而能力获取那一拍演完人不重载，留在原地的是"世界停在 FROZEN、再没人负责解开"。
+## 走 `notify_movement_intent()` 也不行 —— 那条通道在能力没开时整条静音，而这正是玩家第一次
+## 拿到能力的当口（`_tick_ability` 可能还没开），一静音就永久冻住。
+## `moving` 由调用方把**当前的移动意图**原样带进来：不这么办的话 handler 的 `is_moving` 与
+## 世界状态会各说各话（它以为已经报过了、不再报边沿），之后按着方向键走动世界照样流动。
+func release_frozen_override(moving: bool) -> void:
+	_frozen_override = false
+	_is_releasing = false
+	_release_remaining = 0.0
+	_set_state(TimeState.FROZEN if (is_ability_enabled and moving) else TimeState.FLOWING)
 
 
 ## 由 MovementInputHandler 在边沿处调用。未解锁能力时意图被完全忽略，世界恒 FLOWING。

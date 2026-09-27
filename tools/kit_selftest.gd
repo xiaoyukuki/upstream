@@ -49,6 +49,12 @@ extends Node
 ## 19) 世界钟（D59）：全项目第一个纯装饰构件，所以只钉一条"改坏了不会响"的东西 ——
 ##     亮格必须是世界时钟的纯函数。当场独立重算比一次、冻结 20 拍一格不走（且世界时钟本身
 ##     也没涨，把"停"的归因钉在表上不是钟上）、解冻后接着走且不漂。
+## 20) 能力获取那一拍（D61）：一张表抄在三处（帧表 / 祭坛 / 玩家），先对表 —— 时长、帧数、
+##     举升曲线长度、核心进胸 == 爆发帧、青环散完 == 光柱散帧末、胸口一个定义、钉住窗口
+##     折算 1.25 s。再走真接线：踩祭坛即把这一拍交给玩家（两边进度同源）、爆发那一帧钉住
+##     世界而那一拍自己照推进（D44 时钟法在钉住窗口里仍成立）、钉住宽度 == 4/16。最后撒手
+##     落点三种组合各钉一次（能力开×按、能力关×按、能力开×不按）—— 只清开关不接状态机的
+##     写法不报错也不红，只有"醒完发现世界永久冻着"这一种手感。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -242,6 +248,7 @@ func _ready() -> void:
 	await _test_collectible()
 	await _test_wake_intro()
 	await _test_world_clock()
+	await _test_grant_d61()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1571,6 +1578,150 @@ func _test_world_clock() -> void:
 		clock.segment_index() == want)
 	clock.queue_free()
 	await _frame(2)
+
+
+## 第 20 组：能力获取那一拍（D61）。这一组的主体不是行为，是**一张表抄在三处**：帧表
+## （grant 剪辑 16 帧 / 3.2 fps）、祭坛（`grant_time` 与那三个分数）、玩家（`GRANT_FRAMES` /
+## `GRANT_BURST_FRAME` / `GRANT_PIN_FRAMES` / `GRANT_LIFT` / `CHEST_Y`）。抄错的地方不崩、
+## 不报错，只是皮与举升曲线在某一帧悄悄错开半拍 —— 属于"要逐帧盯着回放才露馅"那类，
+## 所以先把表对完（一条帧都不等），再走真接线。
+## 真接线钉三条：① 踩上祭坛就是把这一拍交给玩家，两边进度是同一条式子的两处书写；
+## ② 世界被钉在冻结里那一拍照样推进（D44 那条时钟法在 D61 的钉住窗口里仍然成立）、
+##    钉住宽度就是 `GRANT_PIN_FRAMES` 那 4/16（A3 的 1.25 s 由它折算）；
+## ③ 撒手那一刻的落点必须跟着**当时的意图与能力门控**走 —— 三种组合各钉一次（见
+##    `_grant_release_case`），因为最容易静默退化的正是这里：`set_frozen_override(false)`
+##    只清开关，于是能力没开的人醒完发现世界永久冻着，而它一个字也不报错。
+func _test_grant_d61() -> void:
+	# —— ① 对表 ——
+	var slime := load("res://assets/player/slime_frames.tres") as SpriteFrames
+	var clip_frames: int = slime.get_frame_count(&"grant")
+	var clip_len: float = float(clip_frames) / slime.get_animation_speed(&"grant")
+	var altar := load("res://scenes/objects/ability_altar/ability_altar.tscn") \
+		.instantiate() as AbilityAltar
+	_check("时长同源：祭坛默认 grant_time == grant 剪辑长度（%.2f 对 %.2f）"
+		% [altar.grant_time, clip_len], is_equal_approx(altar.grant_time, clip_len))
+	_check("核心进胸那一帧 == 爆发那一帧（%.4f 对 %.4f）" % [AbilityAltar.FLY_END,
+		float(Player.GRANT_BURST_FRAME) / float(Player.GRANT_FRAMES)],
+		is_equal_approx(AbilityAltar.FLY_END,
+			float(Player.GRANT_BURST_FRAME) / float(Player.GRANT_FRAMES)))
+	_check("青环散完 == 光柱散帧的最后一帧（裁定过「青环和光束同帧」）",
+		is_equal_approx(AbilityAltar.RING_END,
+			float(Player.GRANT_BURST_FRAME + GrantBeams.DISOLVE_FRAMES) / float(Player.GRANT_FRAMES)))
+	_check("胸口只有一个定义（祭坛引用玩家那一份，不留第二份）",
+		is_equal_approx(AbilityAltar.CHEST_Y, Player.CHEST_Y))
+	_check("钉住窗口按默认 grant_time 折算 ≈ 1.25 s（A3）",
+		is_equal_approx(float(Player.GRANT_PIN_FRAMES) / float(Player.GRANT_FRAMES) * altar.grant_time,
+			1.25))
+	altar.free()
+	_check("帧数同源：Player.GRANT_FRAMES == 剪辑帧数（%d 对 %d）"
+		% [Player.GRANT_FRAMES, clip_frames], Player.GRANT_FRAMES == clip_frames)
+	_check("举升曲线有几帧就有几张图（%d 对 %d）" % [Player.GRANT_LIFT.size(), Player.GRANT_FRAMES],
+		Player.GRANT_LIFT.size() == Player.GRANT_FRAMES)
+
+	# —— ② 真接线 ——
+	var world_root = _make_world_root()
+	var rig := _build_mini_level(self)
+	var walker: Player = rig["walker"]
+	var alt: AbilityAltar = rig["altar"] as AbilityAltar
+	# 缩短到 1.6 s：守门不为等演出白耗两秒。窗口边界全按帧比例落，所以下面量的是进度宽度
+	# 而不是秒数 —— 换总长不该把这一组改红。
+	alt.grant_time = 1.6
+	await _frame(2)
+
+	var beams: GrantBeams = null
+	for child: Node in walker.get_children():
+		if child is GrantBeams:
+			beams = child as GrantBeams
+	_check("光柱构件挂在玩家身上（代码建的子节点，为的是不动 player.tscn）", beams != null)
+	if beams != null:
+		var visual := walker.get_node("Visual") as Node2D
+		_check("光柱排在 Visual 之前 = 画在他背后（%d 对 %d）" % [beams.get_index(), visual.get_index()],
+			beams.get_index() < visual.get_index())
+
+	TimeManager.set_ability_enabled(true)
+	walker.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("踩上祭坛即把这一拍交给玩家（窗口在玩家身上，不在构件里）", walker.is_granting())
+	# 一帧的错位是节点顺序带来的（祭坛是人之外的先处理方），所以给 0.02 = 两帧的余量：
+	# 这条钉的是"两边同一条式子"，不是"两边同一拍"。
+	_check("祭坛与玩家进度同源（差 %.3f）" % absf(alt.grant_progress() - walker.grant_progress()),
+		absf(alt.grant_progress() - walker.grant_progress()) < 0.02)
+
+	var guard := 0
+	while not TimeManager.is_frozen_overridden() and guard < 200:
+		guard += 1
+		await _frame(1)
+	_check("爆发那一帧把世界钉住（等了 %d 拍）" % guard, TimeManager.is_frozen_overridden())
+	var pin_from: float = walker.grant_progress()
+	var pinned_t: float = TimeManager.elapsed_world_time
+	await _frame(6)
+	_check("钉住期间那一拍自己仍在推进（吃的不是世界 delta）", walker.grant_progress() > pin_from)
+	_check("钉住期间世界时间一字不涨（%s → %s）"
+		% [str(pinned_t), str(TimeManager.elapsed_world_time)],
+		TimeManager.elapsed_world_time == pinned_t)
+	guard = 0
+	while TimeManager.is_frozen_overridden() and guard < 200:
+		guard += 1
+		await _frame(1)
+	_check("钉住到点自己撒手（钉了 %d 拍）" % guard, not TimeManager.is_frozen_overridden())
+	var pin_width: float = walker.grant_progress() - pin_from
+	_check("钉住宽度 == 4/16 整拍（实测 %.3f）" % pin_width, absf(pin_width - 0.25) < 0.05)
+	guard = 0
+	while walker.is_granting() and guard < 400:
+		guard += 1
+		await _frame(1)
+	_check("整拍演完自己解锁（等了 %d 拍）" % guard, not walker.is_granting())
+	_check("窗口过后没把移动锁留在身上", not walker.movement_locked)
+	_check("被举起来的人最后回到地面上", walker.is_on_floor())
+
+	# —— ③ 撒手落点的三种组合 ——
+	var case_open_key: int = await _grant_release_case(walker, true, true)
+	_check("能力开着 + 按着方向键 → 撒手后世界仍冻着（实测 %d）" % case_open_key, case_open_key == 1)
+	var case_shut_key: int = await _grant_release_case(walker, false, true)
+	_check("能力还没开 + 按着方向键 → 撒手后世界是流的（实测 %d；只清开关的写法在这里会永久冻住）"
+		% case_shut_key, case_shut_key == 0)
+	var case_open_idle: int = await _grant_release_case(walker, true, false)
+	_check("能力开着 + 站着没动 → 撒手后世界是流的（实测 %d）" % case_open_idle, case_open_idle == 0)
+
+	(rig["level"] as Node).queue_free()
+	world_root.queue_free()
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	await _frame(2)
+
+
+## 撒手落点 fixture：起一整拍，在钉住窗口里按需按住方向键，等它自己撒手，回来报撒手那一拍
+## 的冻结态（1=冻、0=流、-1=没等到窗口，调用方按 FAIL 读）。三种组合全从这里过：只会退回
+## FLOWING 的在「开+按」露馅，只会退回 FROZEN 的在「关+按」露馅，不看意图只看能力的在
+## 「开+不按」露馅。整拍走完之前不动输入 —— 窗口还开着就松手，把锁与意图的归因搅在一起。
+func _grant_release_case(walker: Player, ability_on: bool, key_held: bool) -> int:
+	if key_held:
+		Input.action_press(&"move_right")
+	# 关能力那一下顺带 `reset_state()`，正好把上一例的残留清掉（能力开着时它是空操作，
+	# 所以两种情况都得自己等到窗口走完）。
+	TimeManager.set_ability_enabled(ability_on)
+	walker.begin_grant(1.6)
+	var guard := 0
+	while not TimeManager.is_frozen_overridden() and guard < 200:
+		guard += 1
+		await _frame(1)
+	if not TimeManager.is_frozen_overridden():
+		if key_held:
+			Input.action_release(&"move_right")
+		return -1
+	guard = 0
+	while TimeManager.is_frozen_overridden() and guard < 200:
+		guard += 1
+		await _frame(1)
+	var frozen_now: int = 1 if TimeManager.is_time_frozen() else 0
+	guard = 0
+	while walker.is_granting() and guard < 400:
+		guard += 1
+		await _frame(1)
+	if key_held:
+		Input.action_release(&"move_right")
+	await _frame(2)
+	return frozen_now
 
 
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒

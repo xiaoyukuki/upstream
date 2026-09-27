@@ -42,7 +42,10 @@ PAL = {
 }
 
 CLIPS = {
-    "wake": {"loop": False, "fps": 5.0},
+    # wake 的这一档与 fps 都是用户在编辑器里手调过的（5.0 → 4.0、首帧 duration 1.0 → 2.0，
+    # D61 把它记进帧表）。理由不是"顺手同步"，而是 `build_slime_frames.gd` 从 clips.json
+    # 重建 .tres：只要帧表还写着 5.0，任何一次重生成都把他调的手感抹回旧值。
+    "wake": {"loop": False, "fps": 4.0, "durations": {0: 2.0}},
     "idle": {"loop": True, "fps": 6.0},
     "run": {"loop": True, "fps": 14.0},
     "start": {"loop": False, "fps": 16.0},
@@ -57,6 +60,10 @@ CLIPS = {
     "wall_press_in": {"loop": False, "fps": 18.0},
     "wall_press": {"loop": True, "fps": 6.0},
     "wall_press_out": {"loop": False, "fps": 16.0},
+    # D61：16 帧 / 3.2 fps = 5.0 s 整。这个 5.0 不是本地常量 —— 它就是 AbilityAltar.grant_time，
+    # 举升曲线（Player.GRANT_LIFT）与光柱行程（GrantBeams）全部按 16 帧的比例算，
+    # 三处对不上就是"画面在演另一拍"。钉这条账的是 kit_selftest 第 20 组。
+    "grant": {"loop": False, "fps": 3.2},
 }
 
 
@@ -72,14 +79,17 @@ def inside(e, x, y):
 
 def draw_slime(w, h, lean=0.0, dome_lean=0.0, eye_open=1.0, eye_dy=0.0, eye_scale=1.0,
                mouth="smile", nubs=(1, 1), flare=1.0, dome=1.0, wave_offset=0.0,
-               wall_clip=0.0, taper=1.0):
+               wall_clip=0.0, taper=1.0, eye_open_lr=(1.0, 1.0), eye_dy_lr=(0.0, 0.0)):
     """画一帧。w/h = 身体轮廓宽与高（不含脚趾），lean = 整体水平位移，
     dome_lean = 头顶相对脚底的水平剪切位移（脚底粘地不动，越往上摆越多），
     dome/flare = 顶部与底裙的收窄系数，eye_open = 眨眼开度，eye_scale = 压扁缩放
     （整团被压时眼睛跟着变扁），wave_offset = 底边波浪的相位起点。
     wall_clip > 0 = 贴墙压平：把前/右侧轮廓切在 FRAME/2 + wall_clip 这一列。切线钉在画布上
     而不是钉在 cx 上，所以 lean 照常把整团往墙里送或往背面拽，切线始终等于碰撞盒边界；
-    taper = 接触面上下两端各让开的像素数（竖切椭圆会得到两个直角，读作被遮罩切掉）。"""
+    taper = 接触面上下两端各让开的像素数（竖切椭圆会得到两个直角，读作被遮罩切掉）。
+    eye_open_lr / eye_dy_lr = 左右眼各自的开度倍率与竖直偏移（D61 那拍要的"斜着眼看你"：
+    一只眼收 + 两眼不同高）。两枚默认值 (1,1)/(0,0) 与旧版逐像素相同 —— 已落盘的剪辑帧
+    不因为它们而变一个像素（跑过一次全帧字节比对核过）。"""
     img = Image.new("RGBA", (FRAME, FRAME), (0, 0, 0, 0))
     px = img.load()
 
@@ -186,12 +196,13 @@ def draw_slime(w, h, lean=0.0, dome_lean=0.0, eye_open=1.0, eye_dy=0.0, eye_scal
                 continue
             px[c, lowest[c] + 1] = PAL["outline"]
 
-    # 眼睛：圆角方块，落在黑色穹顶里；eye_open 控制眨眼下压，eye_scale 再乘一道压扁
-    eye_h = max(1, int(round(5.0 * eye_open * eye_scale)))
+    # 眼睛：圆角方块，落在黑色穹顶里；eye_open 控制眨眼下压，eye_scale 再乘一道压扁，
+    # eye_open_lr / eye_dy_lr 是左右眼各自的第二道倍率与偏移（默认 1/0 时与旧版同）。
     eye_y = top + L * 0.54 + eye_dy
     eye_cx = cx + shear_at(eye_y)
-    e0 = int(math.floor(eye_y - eye_h / 2.0))
-    for sign in (-1, 1):
+    for k, sign in enumerate((-1, 1)):
+        eye_h = max(1, int(round(5.0 * eye_open * eye_scale * eye_open_lr[k])))
+        e0 = int(math.floor(eye_y + eye_dy_lr[k] - eye_h / 2.0))
         ex = int(round(eye_cx + sign * (w * 0.185) - 2.0))
         for r in range(e0, e0 + eye_h):
             for c in range(ex, ex + 4):
@@ -212,6 +223,16 @@ def draw_slime(w, h, lean=0.0, dome_lean=0.0, eye_open=1.0, eye_dy=0.0, eye_scal
         for r in (my, my + 1):
             for c in (mx, mx + 1):
                 px[c, r] = PAL["mouth"] if r == my else PAL["mouth_dark"]
+    elif mouth == "flat":
+        # 一条横线 = 茫然。比 open 少一格、比 smile 少了那一下上翘，疑惑那拍要的就是"没有表情"。
+        for c in (mx, mx + 1):
+            px[c, my] = PAL["mouth_dark"]
+    elif mouth == "grin":
+        # 两端翘起的四像素弧：比现成的 smile 宽一格、两头各高一格 = 开心。
+        # 越界要挡（lean 大时 mx 会贴到画布边），挡了才不会在 check_fit 之外悄悄裁掉半张嘴。
+        for c, r in ((mx - 1, my - 1), (mx, my), (mx + 1, my), (mx + 2, my - 1)):
+            if 0 <= c < FRAME and 0 <= r < FRAME:
+                px[c, r] = PAL["mouth"]
     return img
 
 
@@ -254,6 +275,33 @@ FRAMES = {
              mouth="open", nubs=(1, 1)),
         dict(w=24, h=30, flare=0.82, dome=1.06, eye_dy=0.8, nubs=(0, 0)),
         dict(w=32, h=21, flare=1.06, eye_dy=0.6, nubs=(1, 1)),
+        dict(w=31, h=25),
+    ],
+    # 能力获取那一拍（D61）：被核心举起 → 疑惑 → 震惊 → 爆发 → 落下 → 开心。
+    # 0..2 举升（拉长、底裙往里收 = 被拽着走）、3..5 疑惑（`eye_open_lr` 单眼收 + `flat` 那条平嘴，
+    # 两笔都用在新旋钮上 = 选型图 A 档）、6..8 震惊（拉到 h=33 逼近盒顶 + `eye_open` 1.6 瞪圆）、
+    # 9 收团蓄力到爆发（`flare` 回到 1.05/1.08 那档宽）、10 还在眯眼张口、11 下坠（现成 land 身段）、
+    # 12..15 开心（`grin` 四像素上翘弧 + 一次弹高）。
+    # 末帧与 idle 第 0 帧一字不差 —— 这段不循环，停在哪一帧就是玩家看见的最后一眼（wake 同一条纪律）。
+    # 帧表只管"身体长什么样"：举升曲线在 Player.GRANT_LIFT、光柱在 GrantBeams、青环在 AbilityAltar，
+    # 三处都按 t×16 读同一张时间表。选型图（tools/gen_grant_preview.py）的 A 档**直接读本表**，
+    # 图里的姿势与游戏里的姿势是同一份数据，不是两处书写。
+    "grant": [
+        dict(w=31, h=26),
+        dict(w=28, h=30, flare=0.95),
+        dict(w=29, h=28, flare=0.97),
+        dict(w=30, h=27, dome_lean=3.5, eye_open_lr=(0.45, 1.0), mouth="flat"),
+        dict(w=30, h=27, dome_lean=-3.5, eye_open_lr=(1.0, 0.45), mouth="flat"),
+        dict(w=30, h=26, dome_lean=2.0, eye_open_lr=(0.6, 1.0), mouth="flat", nubs=(1, 0)),
+        dict(w=26, h=32, flare=0.90, eye_open=1.45, mouth="open", nubs=(1, 1)),
+        dict(w=25, h=33, flare=0.88, eye_open=1.6, eye_dy=-1.0, mouth="open"),
+        dict(w=34, h=19, flare=1.05, eye_open=0.55),
+        dict(w=34, h=18, flare=1.08, eye_open=0.32, eye_dy=1.0, mouth="open"),
+        dict(w=33, h=22, flare=1.04, eye_open=0.4, mouth="open"),
+        dict(w=33, h=20, flare=1.06),
+        dict(w=34, h=20, flare=1.06, eye_open=0.42, mouth="grin"),
+        dict(w=27, h=31, flare=0.92, eye_open=0.42, mouth="grin"),
+        dict(w=32, h=23, flare=1.02, eye_open=0.45, mouth="grin"),
         dict(w=31, h=25),
     ],
     "idle": [
@@ -445,7 +493,7 @@ def anim_preview(out, scale=6):
     imgs, durs = [], []
     ground = (FRAME // 2 + 15) * scale  # local y=+15 所在的屏幕行
     wall_x = (FRAME // 2 + 10) * scale  # 碰撞盒右边界所在的屏幕列
-    for clip in ("wake", "idle", "crouch_in", "crouch", "crouch_out", "start", "run", "stop",
+    for clip in ("wake", "grant", "idle", "crouch_in", "crouch", "crouch_out", "start", "run", "stop",
                  "wall_press_in", "wall_press", "wall_press_out", "jump", "jump_straight",
                  "fall", "land"):
         walled = clip.startswith("wall_press")
@@ -473,7 +521,12 @@ def main():
         for i in range(len(frames)):
             render(name, i).save(os.path.join(out_dir, "%s_%d.png" % (name, i)))
             total += 1
-        manifest[name] = {"fps": CLIPS[name]["fps"], "loop": CLIPS[name]["loop"], "frames": len(frames)}
+        spec = {"fps": CLIPS[name]["fps"], "loop": CLIPS[name]["loop"], "frames": len(frames)}
+        # 手调过的那几帧时长（目前只有 wake 首帧 2.0）必须一起进清单：.tres 由
+        # build_slime_frames.gd 从这份 JSON 重建，漏了它就是把用户的调校冲掉。
+        if CLIPS[name].get("durations"):
+            spec["durations"] = {str(k): float(v) for k, v in CLIPS[name]["durations"].items()}
+        manifest[name] = spec
         print("%-6s %2d frames" % (name, len(frames)))
     with open(os.path.join(out_dir, "clips.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1, sort_keys=True)
