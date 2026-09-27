@@ -18,6 +18,7 @@ const SCRIPTS := [
 	"res://scenes/objects/collectible/collectible.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
+	"res://scenes/objects/clock/clock.gd",
 	"res://components/time_receiver.gd",
 	"res://components/hazard_base.gd",
 	"res://scenes/levels/level_base.gd",
@@ -46,6 +47,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/collectible/collectible.gd",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
+	"res://scenes/objects/clock/clock.gd",
 	"res://components/hazard_base.gd",
 ]
 
@@ -68,6 +70,7 @@ const SCENES := [
 	"res://scenes/objects/collectible/collectible.tscn",
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
 	"res://scenes/objects/fall_zone/fall_zone.tscn",
+	"res://scenes/objects/clock/clock.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
 	"res://scenes/levels/rooms/teaching_corridor.tscn",
 	"res://scenes/levels/main.tscn",
@@ -94,6 +97,7 @@ const EXPORTS := {
 	"res://scenes/objects/collectible/collectible.gd": ["skin", "spin_period"],
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
+	"res://scenes/objects/clock/clock.gd": ["period"],
 	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
@@ -121,6 +125,7 @@ const KEYDOOR_SCRIPT := "res://scenes/objects/key_door/key_door.gd"
 const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
 const FALLZONE_SCRIPT := "res://scenes/objects/fall_zone/fall_zone.gd"
 const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
+const CLOCK_SCRIPT := "res://scenes/objects/clock/clock.gd"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
 
@@ -208,6 +213,7 @@ func _process(_delta: float) -> bool:
 	_verify_afterimage()
 	_verify_piston()
 	_verify_fall_zone()
+	_verify_clock()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
@@ -613,6 +619,78 @@ func _verify_fall_zone() -> void:
 			% [str(col.shape.size), str(col.position)])
 	root.remove_child(zone)
 	zone.free()
+
+
+## D59 世界钟（4 号样式：12 段走带）。它是全项目第一个**纯装饰构件**，所以这里钉的
+## 全是"它悄悄不再是装饰、或者悄悄不再跟世界走"那两类：
+## ① 时基只能是世界时钟的纯函数：脚本里不许出现 `_process`，且必须真的读
+##    `TimeManager.elapsed_world_time` —— 换成自带累加，读数是同一只钟在走，
+##    但死亡重载后它会自己漂（D59 裁定 D1① 的全部理由）；
+## ② 契约面必须为零：不发 signal、不认 run_state。它一旦开始改机制，"装饰层零契约"
+##    这条就烂在这里，而且没人会想起来删；
+## ③ 三档青色色阶的次序不许倒过来（亮格 > 一段余辉 > 二段余辉），未亮的槽必须仍比表盘亮 ——
+##    倒过来就是"哪一格亮"读不出来，而这只钟剩下的全部价值就是这一格；
+## ④ 段数与周期对得上：一格 = period/TICKS，TICKS 必须整除进一圈。
+func _verify_clock() -> void:
+	var src := FileAccess.get_file_as_string(CLOCK_SCRIPT)
+	if src.contains("func _process("):
+		_fail("WorldClock 里出现了 _process：亮格只能走世界时钟，照帧率走会变成冻结里它还在走（D59）")
+	if not src.contains("TimeManager.elapsed_world_time"):
+		_fail("WorldClock 没读 TimeManager.elapsed_world_time：它不再是世界时钟的纯函数，" +
+			"死亡重载后会自己漂（D59 裁定 D1①）")
+	if src.contains("\nsignal "):
+		_fail("WorldClock 发出了 signal：它是纯装饰构件，一旦有契约面就得进 LevelBase 与 run_state（D59）")
+	var cs: Dictionary = (load(CLOCK_SCRIPT) as GDScript).get_script_constant_map()
+	var ticks: int = cs["TICKS"]
+	if ticks <= 3:
+		_fail("WorldClock 的 TICKS=%d：一段亮格 + 两段余辉就把整圈占满，没有「未亮」这一档，" % ticks +
+			"「带在走」就读不出来了（D59）")
+	var lit: Color = cs["COL_LIT"]
+	var t1: Color = cs["COL_TRAIL_1"]
+	var t2: Color = cs["COL_TRAIL_2"]
+	var unlit: Color = cs["COL_UNLIT"]
+	var screen: Color = cs["COL_SCREEN"]
+	if not (_clum(lit) > _clum(t1) and _clum(t1) > _clum(t2) and _clum(t2) > _clum(screen)):
+		_fail("走带那三档青色的亮度次序倒了（%s / %s / %s 对表盘 %s）：「哪一格亮」读不出来（D59）"
+			% [_clum(lit), _clum(t1), _clum(t2), _clum(screen)])
+	if _clum(unlit) <= _clum(screen):
+		_fail("未点亮的槽不比表盘亮：整圈塌成一块黑斑，「这是一只钟」读不出来（D59）")
+	var clock = _enter("res://scenes/objects/clock/clock.tscn")
+	if clock.get_class() != "Node2D":
+		_fail("WorldClock 的根是 %s，不是纯 Node2D：装饰件不该带任何碰撞体（D59）" % clock.get_class())
+	if clock.get_child_count() != 0:
+		_fail("WorldClock 带了 %d 个子节点：它只需要自己画（TimeReceiver 也不用，时基是世界时钟现读的）"
+			% clock.get_child_count())
+	if clock.segment_index() < 0 or clock.segment_index() >= ticks:
+		_fail("segment_index() 越界：%d（应在 0..%d）" % [clock.segment_index(), ticks - 1])
+	# 网格这一头是 D59 落盘当天真踩过的坑：typed array 的 resize() 填的是不透明黑，
+	# 忘了 fill 就是一块 18x18 的黑盒子糊在墙上，而且描边会因为"四邻都有人"整块消失。
+	# 这三条都在当场复现那两种死法，且都不需要渲染器。
+	var box: int = cs["BOX"]
+	var grid: Array[Color] = clock.pixel_grid(0)
+	var opaque := 0
+	var rim := 0
+	for c in grid:
+		if c.a > 0.0:
+			opaque += 1
+		if c == cs["COL_EDGE"]:
+			rim += 1
+	for corner in [0, box - 1, (box - 1) * box, box * box - 1]:
+		if grid[corner].a > 0.0:
+			_fail("WorldClock 网格的四角是不透明的：整块会当成一块黑盒子糊在墙上（D59）")
+			break
+	var fill_ratio := float(opaque) / float(box * box)
+	if fill_ratio < 0.4 or fill_ratio > 0.95:
+		_fail("WorldClock 的占格率 %.2f 不在 0.4~0.95（圆盘 r=8 应是 ~0.62）：形状不是批过的那只（D59）"
+			% fill_ratio)
+	if rim == 0:
+		_fail("WorldClock 一圈描边都没有（D26 第 1 条）：非平铺件在夜光墙上会跟墙糊在一起")
+	root.remove_child(clock)
+	clock.free()
+
+
+func _clum(c: Color) -> float:
+	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
 
 
 func _count_areas(node: Node) -> int:

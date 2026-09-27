@@ -46,6 +46,9 @@ extends Node
 ## 18) 开局苏醒的接线（D57）：整个进程只演一次 —— 关卡根在 _ready 里问常驻根要这一拍，
 ##     常驻根"取走即消耗"，第二张关卡实例（= 同进程里再进关，含死亡重载）就不再演，
 ##     进场的人身上也不该留着窗口里那把移动锁。窗口本身归 sprite_selftest 第 11 组。
+## 19) 世界钟（D59）：全项目第一个纯装饰构件，所以只钉一条"改坏了不会响"的东西 ——
+##     亮格必须是世界时钟的纯函数。当场独立重算比一次、冻结 20 拍一格不走（且世界时钟本身
+##     也没涨，把"停"的归因钉在表上不是钟上）、解冻后接着走且不漂。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -238,6 +241,7 @@ func _ready() -> void:
 	await _test_gate_denial()
 	await _test_collectible()
 	await _test_wake_intro()
+	await _test_world_clock()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1477,6 +1481,53 @@ func _test_wake_intro() -> void:
 	_check("第二次进关的人一进场就没有移动锁（别把上一关的演出赖在他身上）",
 		not awake.movement_locked)
 	root.queue_free()
+	await _frame(2)
+
+
+## 第 19 组：世界钟（D59）。这只构件零契约、零机制，所以"改坏了不会响"的只有一条：
+## 它不再是世界时钟的纯函数。三钉全对着这一条，而且都是当场能算的：
+## ① 亮格 == 独立重算的 f(elapsed_world_time) —— 这条看着像同义反复，其实钉的是"自带累加器"
+##    那条退路：fixture 是在世界时钟已经走了很久之后才进树的，自己从 0 累加的实现在这里
+##    就对不上（那条实现数值上确实也跟冻结停、也跟帧率无关，唯一露馅的就是这个起点偏移）；
+## ② 冻结 20 拍亮格一字不动，而且世界时钟本身也没涨 —— 后者把"停"的归因钉在表上而不是钟上；
+## ③ 解冻后接着走，并且再与 f(世界时钟) 对一次 —— 停过之后不许漂。
+## `period` 在这里钉死成 0.4 s（一格 ≈ 2 拍），不跟脚本默认值 8.0 走：默认值归摆图的人随时调，
+## 照它断言"等 N 拍就一定换格"第二天就会红（D58 那条同一个坑）。
+func _test_world_clock() -> void:
+	TimeManager.set_ability_enabled(true)
+	var clock := load("res://scenes/objects/clock/clock.tscn").instantiate() as WorldClock
+	clock.period = 0.4
+	clock.position = Vector2(1400.0, -300.0)
+	add_child(clock)
+	# 先把世界时钟跑开一段再比。上一组（第 18 组）那张迷你关卡在 `_ready()` 里 `reset_state()`
+	# 过，此刻 `elapsed_world_time` 才 0.1 s —— 世界时钟与"节点自己从 0 累加"的起点差就落在
+	# 一格（0.4/12 s）以内，①那条就抓不到它。等 40 拍 = 差出 6 格，退路才真的堵死。
+	await _frame(40)
+	var ticks: int = clock.TICKS
+	var want := int(fmod(TimeManager.elapsed_world_time / clock.period, 1.0) * float(ticks)) % ticks
+	_check("亮格 == 当场独立重算的 f(世界时钟)（%d 对 %d）" % [clock.segment_index(), want],
+		clock.segment_index() == want)
+
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var frozen: int = clock.segment_index()
+	var t0: float = TimeManager.elapsed_world_time
+	await _frame(20)
+	_check("冻结 20 拍，亮格一格没走（%d 还是 %d）" % [frozen, clock.segment_index()],
+		clock.segment_index() == frozen)
+	_check("亮格没走是因为世界时钟没涨（%s → %s）" % [str(t0), str(TimeManager.elapsed_world_time)],
+		TimeManager.elapsed_world_time == t0)
+
+	TimeManager.notify_movement_intent(false)
+	var waited := 0
+	while clock.segment_index() == frozen and waited < 60:
+		await _frame(1)
+		waited += 1
+	_check("解冻后接着走（等了 %d 拍）" % waited, clock.segment_index() != frozen)
+	want = int(fmod(TimeManager.elapsed_world_time / clock.period, 1.0) * float(ticks)) % ticks
+	_check("停过之后不漂：亮格仍然 == f(世界时钟)（%d 对 %d）" % [clock.segment_index(), want],
+		clock.segment_index() == want)
+	clock.queue_free()
 	await _frame(2)
 
 
