@@ -39,7 +39,7 @@ extends CharacterBody2D
 ##
 ## 多台的合成口径是 **OR**：任一台按下就伸出，**全部**松开才收回（裁定 D60①A）。这条不是
 ## 顺手写的：接第二台的时候如果沿用"信号里直接写 `is_out`"那种最后一条说了算的写法，
-## A 踩着、B 松开的那一瞬间这块会当着人的面缩回去。所以聚合只有一个来源（`_reresolve()`），
+## A 踩着、B 松开的那一瞬间这块会当着人的面缩回去。所以聚合只有一个来源（`_refresh_out()`），
 ## 它读各源**当前的** `is_pressed` 而不是事件历史 —— 一台被拆走（`queue_free` 之后不再有信号）
 ## 时它会自己从聚合里掉出去，而事件历史版会永远停在"按下"那一档。
 ## 代价是触发源的契约从"发 `pressed_changed`"变成"发信号 **且** 暴露 `is_pressed`"
@@ -358,6 +358,9 @@ func _reconnect_triggers() -> void:
 		# 种子读各源当前的布尔量：只吃边沿的话，"进树时就已经踩着"的那台永远不算数。
 		# 走 `get()` 而不是 `source.is_pressed`：契约只保证信号，属性名写死会让静态类型这里就编译不过。
 		var flag: Variant = source.get(&"is_pressed")
+		if flag == null:
+			push_warning("活塞 %s 的 trigger %s 不发 %s 但没有 is_pressed：这台只吃边沿，进树时已按下的那一次会读不到" % [
+				name, str(source.name), TRIGGER_SIGNAL])
 		_state[source] = bool(flag) if flag != null else false
 	_refresh_out()
 
