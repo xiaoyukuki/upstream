@@ -55,6 +55,11 @@ extends Node
 ##     世界而那一拍自己照推进（D44 时钟法在钉住窗口里仍成立）、钉住宽度 == 4/16。最后撒手
 ##     落点三种组合各钉一次（能力开×按、能力关×按、能力开×不按）—— 只清开关不接状态机的
 ##     写法不报错也不红，只有"醒完发现世界永久冻着"这一种手感。
+## 21) 祭坛那次自动存档（D62，裁定「只写重生位、不给灯」）：走生产链钉四条 —— 第一次获得能力
+##     那一拍演完时重生位换成**他落脚那一格**（不是存档点那一格，也不是祭坛原点）；
+##     之前那台存档点被顶灭、`respawn_marker` 整个抹掉（留着下次重载会点亮一台已经不成立的台）；
+##     跳着撞进触发带的那一次**不存**（写进去的是一格空气），而且落地之后也不补写。
+##     这一组故意不给祭坛灯：它不发 `checkpoint_reached`，所以"没台亮着"这条要能被钉住。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -249,6 +254,7 @@ func _ready() -> void:
 	await _test_wake_intro()
 	await _test_world_clock()
 	await _test_grant_d61()
+	await _test_altar_save()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -1724,8 +1730,91 @@ func _grant_release_case(walker: Player, ability_on: bool, key_held: bool) -> in
 	return frozen_now
 
 
-## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒
-## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
+## 第 21 组：祭坛那次自动存档（D62，裁定「只写重生位、不给灯」）。四条钉全走生产链，
+## 而且都落在「有读必须有写」那本账上（D51/D52 的教训：守门手写那个键会把"根本没人写"整个盖住）：
+## ① 演完那一刻重生位换成**他落脚那一格** —— 不是存档点那一格（3100）、也不是祭坛原点（3000）
+##    那个死坐标；② 之前那台被顶灭，`respawn_marker` 整个抹掉；③ 跳着撞进触发带的那一次不存；
+## ④ 落地之后也不补写（下降沿已经过去，那一格空气永远进不了账）。
+func _test_altar_save() -> void:
+	# 先清掉上一组的人：本组要用 get_first_node_in_group 挑玩家（LevelBase 那道闸就是这么认人的）。
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(3)
+
+	var stub = _make_world_root()
+	var rig := _build_mini_level(stub)
+	var walker: Player = rig["walker"]
+	var terminal: Checkpoint = rig["checkpoint"]
+	await _frame(3)
+	# —— ① 先给这具身体一个"旧的家"，否则「旧台被顶灭」那句断言是空的（本来就没亮过）。 ——
+	# Area2D 的重叠登记要几拍（D53 那条坑），所以下面每一处等待都是轮询带上限，不死等帧数。
+	var guard := 0
+	walker.global_position = Vector2(3100.0, -Player.COLLISION_HALF_HEIGHT)
+	guard = 0
+	while not terminal.is_active and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：先踩一台存档点，它亮着且身份进了 run_state",
+		terminal.is_active and stub.run_state.has("respawn_marker"))
+	var old_pos: Vector2 = stub.run_state.get("respawn_position")
+	# —— ② 站上祭坛（人是站着的，不是跳进来的）。 ——
+	walker.global_position = Vector2(3000.0, -Player.COLLISION_HALF_HEIGHT)
+	guard = 0
+	while not walker.is_granting() and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("踩上去即进入授予那一拍", walker.is_granting())
+	guard = 0
+	while walker.is_granting() and guard < 400:
+		guard += 1
+		await _frame(1)
+	await _frame(3)
+	var saved_pos: Vector2 = stub.run_state.get("respawn_position", Vector2.ZERO)
+	_check("演完即由游戏代码把重生位换成他落脚那一格（x≈3000，不是存档点那格 3100）",
+		not walker.is_granting() and absf(saved_pos.x - 3000.0) < 2.0 and saved_pos != old_pos)
+	_check("存的就是他此刻站着的那一点（同一格，不是抄来的坐标）",
+		(stub.run_state.get("respawn_position") as Vector2).distance_to(walker.global_position) < 2.0)
+	# —— ③ 不给灯的代价：一台都不亮，身份键整条抹掉。 ——
+	_check("旧那台被顶灭（亮 = 现在死会回到这儿，而重生位已被祭坛接走）",
+		not terminal.is_active and _active_count([terminal]) == 0)
+	_check("respawn_marker 抹掉而不是留着（留着 = 下次重载点亮一台已经不成立的台）",
+		not stub.run_state.has("respawn_marker"))
+	(rig["level"] as Node).queue_free()
+	stub.queue_free()
+	await _frame(3)
+
+	# —— ④ 跳着撞进触发带的那一次不许存：新 rig（祭坛一次性），从空中掉进带里。 ——
+	var stub2 = _make_world_root()
+	var rig2 := _build_mini_level(stub2)
+	var diver: Player = rig2["walker"]
+	diver.global_position = Vector2(3000.0, -160.0)
+	guard = 0
+	while not diver.is_granting() and guard < 120:
+		guard += 1
+		await _frame(1)
+	_check("前提：空中也会撞上触发带（带心在地板以上，跳着进来照样触发祭坛）",
+		diver.is_granting())
+	guard = 0
+	while diver.is_granting() and guard < 400:
+		guard += 1
+		await _frame(1)
+	await _frame(3)
+	_check("跳着撞进来的那一次不写重生位（写进去的是一格空气）",
+		not stub2.run_state.has("respawn_position"))
+	# 落地之后再看一眼：下降沿已经过去，不该有第二次机会补写。
+	guard = 0
+	while not diver.is_on_floor() and guard < 240:
+		guard += 1
+		await _frame(1)
+	await _frame(3)
+	_check("他随后落回地面也不补写（那一发只认下降沿）",
+		diver.is_on_floor() and not stub2.run_state.has("respawn_position"))
+	(rig2["level"] as Node).queue_free()
+	stub2.queue_free()
+	await _frame(2)
+
+
+## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
 func _fall_zone_instance(parent: Node, at: Vector2, width: float, depth: float) -> FallZone:
 	var zone := load("res://scenes/objects/fall_zone/fall_zone.tscn") \
 		.instantiate() as FallZone

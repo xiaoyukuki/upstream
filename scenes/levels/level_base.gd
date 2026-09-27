@@ -17,6 +17,8 @@ extends Node2D
 ##    D54 加第三族传感器：彩蛋收集物（发 `collectible_taken` + 认 `mark_taken()`）。
 ##    它与钥匙卡分道扬镳 —— 钥匙死了掉回去（D30 第 3 条），彩蛋拿过就永久空座：
 ##    前者是机制素材、重来正是解谜的一部分，后者是对"发现"的收据。
+##    D62 再加一发不由构件发起的存档：第一次获得能力、那一拍演完的那一刻，把玩家当时的
+##    落脚点写进重生位，并抹掉存档点身份（重生位已不属于任何一台，所以一台都不该亮）。
 ##
 ## 第 3 条原来每关抄一遍：`level_01_tutorial.gd` 与 `level_template.gd` 各一份，实现还不一致
 ## （引导关写死 const、模板用导出项）。现在下沉到基类，新关只要按模板约定摆好
@@ -65,6 +67,14 @@ var _dying: bool = false
 var _death_pending: bool = false
 ## 当前激活的那一台存档点（D51）：亮灭只有这一处说了算，存档点之间不互认。
 var _active_checkpoint: Node
+## 玩家本体的缓存（本来只为 D16 那条「松手了没」而取，D62 起同一拍还要问他「那一拍演完没」）。
+var _player: Player
+## 上一次轮询时 `is_granting()` 的值。存的是**下降沿**而不是「存过了」那个布尔：
+## 这一发要认的是「那一拍演完了」这件事，而它只可能发生一次（祭坛一次性）。
+var _grant_was_running: bool = false
+## 那一拍开始时他是不是**站着**（上升沿那一帧的 `is_on_floor()`）。跳着撞进触发带的那一次
+## 不自动存 —— 见 `_tick_grant_save()`。
+var _grant_stood: bool = false
 
 
 func _ready() -> void:
@@ -96,6 +106,7 @@ func _process(delta: float) -> void:
 	if _dying:
 		return
 	_tick_ability(delta)
+	_tick_grant_save()
 	_tick_goal(delta)
 
 
@@ -145,6 +156,7 @@ func _apply_run_state() -> void:
 		_set_player_start(state["respawn_position"])
 	# 身份跟着位置一起回灌（D51）：重载后亮的还是死前那一台，不是全灭、也不是全亮。
 	# 路径解析不到（摆图时改了名或挪了层级）就当没这回事 —— 重生位本身仍然有效。
+	# 键**整个不在**也是合法状态：那是 D62 那一发（重生位在祭坛、不属于任何一台）。
 	if state.has("respawn_marker"):
 		_set_active_checkpoint(get_node_or_null(state["respawn_marker"]))
 	if state.get("altar_spent", false):
@@ -181,6 +193,7 @@ func _grab_handler() -> void:
 	var player: Player = get_tree().get_first_node_in_group(&"player")
 	if player == null:
 		return
+	_player = player
 	_handler = player.input_handler
 
 
@@ -289,6 +302,34 @@ func _tick_ability(delta: float) -> void:
 	_on_ability_enabled("timeout" if _handler.is_moving else "still", _ability_wait)
 
 
+## 祭坛那次自动存档（D62）：**轮询 `is_granting()` 的下降沿**，而不是让 Player 或祭坛发一条
+## 「演完了」的信号 —— D61 给那一拍定的口径是「进度只留一条事实，不给唯一事实另发信号」，
+## 而下降沿本来就从那条事实里读得出来，多一根信号就是多一处书写点。
+## 落在演完而不是踩上那一帧：触发带 64 宽、台子两侧各 32 px 都算踩着，而那一条带的中心
+## 在地板以上，所以「踩上触发带」那一格完全可以是空气 —— 演完这一刻他正站在自己落回地面的那一格上。
+## 演完之后 `_grant_remaining` 归 0、`movement_locked` 已解，这一拍只可能发生一次
+## （祭坛一次性，重载回灌走 `mark_spent()` 不重播），所以不需要"存过了"那个布尔。
+func _tick_grant_save() -> void:
+	if _player == null:
+		return
+	if _player.is_granting():
+		if not _grant_was_running:
+			_grant_was_running = true
+			# 「他是站上来的还是跳进来的」在**上升沿**判：这一刻 `is_on_floor()` 还是常规物理
+			# （`move_and_slide`）留下的读数，说的是实话。演完那一刻再读就不算数了 —— 整段举升
+			# 走的是 `move_and_collide`，那条路上这个标记归谁更新不该由我来猜。
+			_grant_stood = _player.is_on_floor()
+		return
+	if not _grant_was_running:
+		return
+	_grant_was_running = false
+	# 跳着撞进来的那一次不存：写进去的是一格空气，重生回去就是再摔一遍，
+	# 而摔落点下方有什么正好是未知数（D52 那一族「回到一个会立刻死的地方」）。
+	if not _grant_stood:
+		return
+	_save_at_grant(_player.global_position)
+
+
 func _tick_goal(delta: float) -> void:
 	if not _goal_reached or goal_restart_delay <= 0.0 or _handler == null:
 		return
@@ -339,16 +380,44 @@ func _on_checkpoint_reached(position: Vector2, source: Node) -> void:
 	state["respawn_marker"] = _relative_path(source)
 
 
+## 祭坛那一发的记账（D62）。**刻意不给灯**（用户裁定）：祭坛不发 `checkpoint_reached`、
+## 也不实现 claim/release，所以它不进存档点那一族 —— 行为不同就拆场景，一个给能力、
+## 一个记重生位，硬并成一副皮会让「已耗」和「当前存档点」两件事共用一个视觉。
+## 但旧那台的灯必须灭：D51 立的规则是「亮 = 现在死会回到这儿」，重生位已被这里接走，
+## 一台继续亮着就是在说谎。于是代价落在玩家那一侧 —— 这一刻起全关卡无灯，
+## 而他脚下这一格确实是回家处。
+func _save_at_grant(position: Vector2) -> void:
+	_set_active_checkpoint(null)
+	var root := _world_root()
+	if root == null:
+		return
+	var state: Dictionary = root.call(&"get_run_state")
+	state["respawn_position"] = position
+	# 抹掉身份而不是留着：回灌那条链是「有 respawn_marker 才点一台」，留着旧路径等于
+	# 让下一次重载把一台已经不成立的存档点重新点亮。
+	state.erase("respawn_marker")
+
+
 ## 唯一激活（D51）：新台点亮、上一台回 idle。同一台再踩直接返回 —— 重生时人正站在
 ## 自己那条带上，body_entered 会再点一次名，不该因此把同一台顶掉又装回来。
+## 传 null = 全灭（D62：重生位不再属于任何一台，所以一台都不该亮）。
 func _set_active_checkpoint(node: Node) -> void:
-	if node == null or node == _active_checkpoint:
+	if node != null and node == _active_checkpoint:
 		return
-	if is_instance_valid(_active_checkpoint) and _active_checkpoint.has_method(&"release"):
-		_active_checkpoint.call(&"release")
+	_clear_active_checkpoint()
+	if node == null:
+		return
 	_active_checkpoint = node
 	if node.has_method(&"claim"):
 		node.call(&"claim")
+
+
+## 熄灭当前那台。释放只写这一处 —— `_set_active_checkpoint` 与自己都要它，
+## 两处各写一份 release 就等于给「谁亮着」这件事实第二个书写者。
+func _clear_active_checkpoint() -> void:
+	if is_instance_valid(_active_checkpoint) and _active_checkpoint.has_method(&"release"):
+		_active_checkpoint.call(&"release")
+	_active_checkpoint = null
 
 
 ## 身份存的是「相对本关卡根的 NodePath」而不是节点引用：关卡每死一次就整个换掉，

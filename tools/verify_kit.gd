@@ -215,6 +215,7 @@ func _process(_delta: float) -> bool:
 	_verify_piston()
 	_verify_fall_zone()
 	_verify_clock()
+	_verify_altar_save()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
@@ -688,6 +689,32 @@ func _verify_clock() -> void:
 		_fail("WorldClock 一圈描边都没有（D26 第 1 条）：非平铺件在夜光墙上会跟墙糊在一起")
 	root.remove_child(clock)
 	clock.free()
+
+
+## D62 祭坛那次自动存档（用户裁定「只写重生位、不给灯」）。钉的全是"这一拍悄悄改名换姓"那三类：
+## ① 祭坛不许加入存档点那一族 —— 不发 `checkpoint_reached`、不实现 claim/release。它一旦发了，
+##    `LevelBase._bind_checkpoints()` 的全子树扫描会**自动**把它算成一台存档点，"不给灯"这条裁定
+##    就在没人改存档点代码的情况下被推翻，而且画面不会响（行为不同就拆场景，一个给能力一个记重生位）；
+## ② `respawn_position` 必须有两处书写（存档点 + 祭坛）。这条是 D51 那笔账的正身：
+##    `respawn_marker` 当初就是"有读、没人写"绿了好几轮；
+## ③ 释放只许一个书写者：`call(&"release")` 在 LevelBase 里出现两次，就意味着"谁亮着"这件事实
+##    有两个人在管 —— 那条不变量（全关卡只一台亮）会从这里开始漏。
+func _verify_altar_save() -> void:
+	var altar := FileAccess.get_file_as_string(ALTAR_SCRIPT)
+	if altar.contains("checkpoint_reached"):
+		_fail("AbilityAltar 发出了 checkpoint_reached：D62 裁定「不给灯」，它一发这条就会被 " +
+			"_bind_checkpoints 自动算成一台存档点，重生位与灯两件事悄悄合到了同一个构件上")
+	if altar.contains("func claim") or altar.contains("func release"):
+		_fail("AbilityAltar 长出了 claim/release：同上，它不是存档点那一族（D62）")
+	var base := FileAccess.get_file_as_string(LEVEL_BASE_SCRIPT)
+	var writes := base.count("state[\"respawn_position\"] = ")
+	if writes != 2:
+		_fail("run_state 的 respawn_position 书写点 = %d（应为 2：存档点 + 祭坛那一发，D62）" % writes)
+	if not base.contains("erase(\"respawn_marker\")"):
+		_fail("祭坛那一发没抹掉 respawn_marker：留着旧路径 = 下次重载点亮一台已经不成立的存档点")
+	var releases := base.count("call(&\"release\")")
+	if releases != 1:
+		_fail("release 的调用点 = %d（应为 1）：谁亮着这件事实只能有一个书写者（D51/D62）" % releases)
 
 
 func _clum(c: Color) -> float:
