@@ -89,7 +89,7 @@ const EXPORTS := {
 	"res://scenes/objects/pendulum/pendulum.gd": ["amplitude_degrees", "period", "phase", "rod_length"],
 	"res://scenes/objects/moving_block/moving_block.gd": ["travel_offset", "block_size", "travel_speed", "block_color"],
 	"res://scenes/objects/piston_block/piston_block.gd": ["travel_offset", "block_size",
-		"extend_speed", "retract_speed", "triggers"],
+		"extend_speed", "retract_speed", "rest_out", "triggers"],
 	"res://scenes/objects/ability_altar/ability_altar.gd": ["width", "altar_height", "sensor_height", "grant_time"],
 	"res://scenes/objects/sensor_zone/sensor_zone.gd": ["width", "height", "band_centre_y", "visible_in_game"],
 	"res://scenes/objects/spikes/spikes.gd": ["length"],
@@ -533,7 +533,9 @@ func _verify_afterimage_kill(emitter, bodies: Array) -> void:
 			% [str(band.position.y), str(cell.position.y)])
 
 
-## D49 活塞踏板。这一遍钉的全是"改了不响、要到试玩才露馅"那五件：
+## D49 活塞踏板。这一遍钉的全是"改了不响、要到试玩才露馅"那五件，D63 起再加一组反向档检查
+## （源码形状三条：电平→位只许一处映射、两档速度必须绑 `is_out`、不许出现 `if _level`；
+## 外加一次实测：反向块**进树当帧就落在满行程**，锚点仍是摆下去那一点）：
 ## ① 脚本里根本不该出现 `_process`（这台机器上 process 是物理的 2.4 倍，照它走位等于伸出量
 ##    随帧率抖，而且冻结那道闸根本拦不住 process）；② 碰撞层契约 —— 尤其是 mask 必须是 0，
 ##    带上 terrain(1) 就正好撞上"收回态整块埋在墙里 = 起点重叠，`move_and_collide` 把整段位移
@@ -590,6 +592,30 @@ func _verify_piston() -> void:
 	piston.global_position = piston.get("_anchor") + Vector2(0.0, -64.0)
 	if not is_equal_approx(piston.progress(), 1.0):
 		_fail("满行程处 progress()=%s（应 1.0）" % str(piston.progress()))
+	# —— D63 反向档。这里钉的是"形状 + 进树那一拍"，行为那半边（踩下才收 / 松开慢慢回 /
+	# 反向档下 OR 仍成立）归 kit_selftest 第 13 组 f 档，在无头物理里跑帧才验得出来。
+	if src.count("is_out = _level != rest_out") != 1:
+		_fail("电平→位的映射出现 %d 次（应恰好 1：住在 _refresh_out 那一行；在 set_out 或 "
+			+ "_physics_process 里再补一次符号就有两份真值）"
+			% src.count("is_out = _level != rest_out"))
+	if not src.contains("var speed: float = extend_speed if is_out else retract_speed"):
+		_fail("两档速度不再按 is_out（在哪一头）选：D63② 那条「绑几何不绑输入」被改源了")
+	if src.contains("if _level"):
+		_fail("出现了 `if _level`：电平被拿去选速度或决定让位 —— 那两处读的必须是 is_out（D63）")
+	var flipped = load("res://scenes/objects/piston_block/piston_block.tscn").instantiate()
+	flipped.position = Vector2(300.0, 60.0)
+	flipped.rest_out = true
+	root.add_child(flipped)	# _ready 在这一刻跑：常态那一头必须**当帧瞬落**，不是从洞里爬出去
+	if not is_equal_approx(flipped.progress(), 1.0):
+		_fail("反向块进树后 progress()=%s（应 1.0：D63③ 瞬落）" % str(flipped.progress()))
+	if not flipped.is_out or flipped._level:
+		_fail("反向块空接线时 is_out=%s / _level=%s（应 真 / 假：没人踩着就停在满行程，"
+			+ "整列留空自然退化成一座静态桥）" % [str(flipped.is_out), str(flipped._level)])
+	if flipped.global_position != Vector2(364.0, 60.0):
+		_fail("瞬落落点 %s（应 (364,60) = 锚点 + 单位 × 跨度：摆下去那一点仍然是收回态的前缘，"
+			+ "反向档不许挪原点契约）" % str(flipped.global_position))
+	root.remove_child(flipped)
+	flipped.free()
 	root.remove_child(piston)
 	root.remove_child(twin)
 	piston.free()

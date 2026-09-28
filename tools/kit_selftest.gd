@@ -27,7 +27,8 @@ extends Node
 ## 13) 活塞踏板（D49）：一组活塞接同一个按钮（多对一合法）；伸出/收回只跟按钮布尔量走，
 ##     冻结即停在当前伸出量、松开只记意图；收回快过伸出且把落脚点从脚下抽干（人掉下去不是
 ##     被带着沉进地里）；行程上有人时**挤开**他，他背后有墙则他自己被挡住、方块跟着停在接触面
-##     上走不满行程 —— 于是挤压不发生，且顶住期间不攒位移。
+##     上走不满行程 —— 于是挤压不发生，且顶住期间不攒位移。D63 起再加一档 f：反向档 rest_out
+##     （进树即在满行程、踩下才收回、松开慢慢回，两档速度仍绑几何；冻结无旁路；多台 OR 原样）。
 ## 14) 粘性进度（D51）：祭坛「已耗」由游戏代码真的写进 run_state（不是守门替它写），
 ##     存档点全关卡只一台激活，且死亡重载后亮的还是死前那一台。
 ## 15) 坠落带（D52）：掉出世界这条路从无兜底改成有一根线 —— 带子只认玩家且一条命只发一次；
@@ -817,7 +818,7 @@ func _afterimage_layers(rungs: Array, active: int, want_solid: bool) -> bool:
 	return true
 
 
-## 第 13 组：活塞踏板（D49）。五档各钉一条"改坏了不会响、只有试玩才露馅"的：
+## 第 13 组：活塞踏板（D49）。六档各钉一条"改坏了不会响、只有试玩才露馅"的：
 ## a) 一组两块接同一个按钮（多对一合法），冻结即停在当前伸出量上、松开只记意图；
 ## b) 收回明显快过伸出 —— 伸得慢到踩按钮的人跟得上，收得快到站不住；
 ## c) 收回把落脚点从脚下抽干：人自己掉回地面，不是被方块带着沉进地里；
@@ -825,6 +826,9 @@ func _afterimage_layers(rungs: Array, active: int, want_solid: bool) -> bool:
 ##    且顶住期间不攒位移（脱困那一帧不会攒出一发弹射）。
 ## e) 一块接两台按钮（D60）：合成是 OR —— 任一台按下就伸出，**全**松开才收回。这一档存在的理由
 ##    是那条最省事的写法（把信号参数直接抄进 `is_out`）：A 还踩着、B 一松就把人脚下的路抽掉。
+## f) 反向档 rest_out（D63）：换的只有"电平映射到哪一头"那一行 —— 进树即在满行程（瞬落）、
+##    踩下才收回、松开慢慢回；两档速度仍绑几何（收回快过伸回）、冻结无旁路、多台 OR 原样，
+##    只是"任一台按下"说的是收回。
 func _test_piston() -> void:
 	# 活塞靠 player 组找人推，前面几组留一个人在树上就是替错的人做测试 —— 先点破再往下跑。
 	var leftovers := get_tree().get_nodes_in_group(&"player")
@@ -1016,6 +1020,72 @@ func _test_piston() -> void:
 		Vector2(5800.0, -32.0), Vector2(64.0, 0.0))
 	_check("已按下的触发源：起手就是伸出态（读当前值而不是等信号）", seeded.is_out)
 	rig4.queue_free()
+
+	# —— f：反向档 `rest_out`（D63：常态停在满行程，踩下才收回）。这一档要钉的是"换一头当常态"
+	##    到底换了几格 —— 只该换电平→位那一行映射，积分器、两档速度、OR 合成全都原样跟着走。
+	##    所以断言的形状与普通档对称，只是朝向反过来。——
+	var rig5 := Node2D.new()
+	rig5.name = "RestRig"
+	add_child(rig5)
+	var plate_r := _plate_instance(rig5, "PlateR", Vector2(5900.0, -400.0))
+	var bridge := _piston_instance(rig5, [plate_r], "Bridge",
+		Vector2(5900.0, -32.0), Vector2(64.0, 0.0), true)
+	_check("反向块进树那一拍就在满行程（瞬落，不是从洞里爬出来）",
+		is_equal_approx(bridge.progress(), 1.0))
+	_check("没人踩着 = 停在常态那一头：is_out 真而电平假（这两格分得开才叫反向档）",
+		bridge.is_out and not bridge._level)
+	plate_r._set_pressed(true)
+	_check("踩下即转入收回（异或翻面：电平真而 is_out 假）", bridge._level and not bridge.is_out)
+	var retract_r := 0
+	while bridge.progress() > 0.0 and retract_r < 300:
+		retract_r += 1
+		await get_tree().physics_frame
+	_check("踩下真的收到洞里（反向档的「收回」由按下触发，走完落在伸出量 0）",
+		bridge.progress() == 0.0)
+	plate_r._set_pressed(false)
+	_check("松开转回常态那一头", bridge.is_out)
+	var extend_r := 0
+	while bridge.progress() < 1.0 and extend_r < 300:
+		extend_r += 1
+		await get_tree().physics_frame
+	# 先格式化再拼接：`%` 比 `+` 结合得紧，写成 "a" + "b" % [...] 只作用于后半截字面量，
+	# 前半截那两个 %d 会原样印出来（这一条第一次跑就是这么露馅的）。
+	var beat := "%d 拍 vs %d 拍" % [retract_r, extend_r]
+	_check("松开慢慢回伸，且收回明显快过伸回（" + beat
+		+ "：两档速度绑的是几何，不是「踩下 / 松开」那两档输入）",
+		bridge.progress() == 1.0 and retract_r * 2 < extend_r)
+	# 冻结里照样钉住：反向档不许自带旁路。
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	plate_r._set_pressed(true)
+	await _frame(8)
+	_check("冻结中踩下只改朝向、不改伸出量（世界钉住时这块一格不挪）",
+		is_equal_approx(bridge.progress(), 1.0) and not bridge.is_out)
+	TimeManager.notify_movement_intent(false)
+	plate_r._set_pressed(false)
+	guard = 0
+	while bridge.progress() < 1.0 and guard < 300:
+		guard += 1
+		await get_tree().physics_frame
+	# 反向档下的多台合成：口径仍是 OR，只是"任一台按下"说的是收回。
+	var plate_r2 := _plate_instance(rig5, "PlateR2", Vector2(5960.0, -400.0))
+	var pair: Array[NodePath] = [NodePath("../PlateR"), NodePath("../PlateR2")]
+	bridge.triggers = pair
+	_check("反向档换的是映射不是合成：两台都松开时停在伸出态",
+		bridge._bound.size() == 2 and bridge.is_out and is_equal_approx(bridge.progress(), 1.0))
+	plate_r._set_pressed(true)
+	plate_r2._set_pressed(true)
+	guard = 0
+	while bridge.progress() > 0.0 and guard < 300:
+		guard += 1
+		await get_tree().physics_frame
+	plate_r._set_pressed(false)
+	await _frame(6)
+	_check("一台松开而另一台还踩着 → 不许伸回来（D60 那条最省事的错写法在反向档下同样致命："
+		+ "伸回来的那一头正是人脚下的落脚点）", not bridge.is_out and bridge.progress() == 0.0)
+	plate_r2._set_pressed(false)
+	_check("两台全松开才转入伸回去", bridge.is_out)
+	rig5.queue_free()
 	TimeManager.reset_state()
 	# 等这一组的人真的离树：第 14 组要用 get_first_node_in_group 挑玩家，留着他把回灌做在错的人身上。
 	await _frame(2)
@@ -1840,7 +1910,7 @@ func _plate_instance(rig: Node, node_name: String, at: Vector2) -> ButtonPlate:
 ## `sources` 是一列（D60 起一块可以指多台，OR 合成），相对路径且在进树前赋好：
 ## `_ready()` 里那次 `_reconnect_triggers()` 才解析得动。
 func _piston_instance(rig: Node, sources: Array, node_name: String,
-		at: Vector2, travel: Vector2) -> PistonBlock:
+		at: Vector2, travel: Vector2, flipped: bool = false) -> PistonBlock:
 	var piston := load("res://scenes/objects/piston_block/piston_block.tscn") \
 		.instantiate() as PistonBlock
 	piston.name = node_name
@@ -1848,6 +1918,9 @@ func _piston_instance(rig: Node, sources: Array, node_name: String,
 	piston.travel_offset = travel
 	piston.extend_speed = 128.0
 	piston.retract_speed = 512.0
+	# 反向档（D63）必须在 `add_child` 之前写：`_ready()` 里那次"常态那一头瞬落"读的就是它，
+	# 进树之后再拧只会让这块停在摆下去的那一头，测到的就不是开局那一拍。
+	piston.rest_out = flipped
 	var listed: Array[NodePath] = []
 	for source in sources:
 		listed.append(NodePath("../" + String((source as Node).name)))
