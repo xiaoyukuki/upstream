@@ -110,7 +110,12 @@ const NODE_PATHS := {
 		"Player", "PlayerSpawn",
 	],
 	"res://scenes/levels/level_template.tscn": [
-		"Terrain/Floor", "Objects", "Triggers/GoalZone", "Player", "PlayerSpawn",
+		"Terrain/WallFill", "Terrain/Decor", "Terrain/Tiles",
+		"Objects/Door/Door", "Objects/Door/ButtonPlate", "Objects/PistonBlock/PistonBlock",
+		"Objects/Checkpoint/Checkpoint", "Objects/KeyDoor/KeyDoor", "Objects/Spikes/Spikes",
+		"Objects/Collectible/Collectible", "Objects/AfterimageEmitter/AfterimageEmitter",
+		"Objects/AbilityAltar", "Triggers/GoalZone", "Triggers/FallZone",
+		"Player", "PlayerSpawn",
 	],
 }
 
@@ -197,6 +202,7 @@ func _initialize() -> void:
 				if level.get_node_or_null(NodePath(child_path)) == null:
 					_fail("missing node %s/%s" % [path, child_path])
 		_check_level_contract(level, path)
+		_check_group_containers(level, path)
 		_doors_checked += _check_trigger_wiring(level, path, DOOR_SCRIPT, "门", "trigger")
 		_pistons_checked += _check_trigger_wiring(level, path, PISTON_SCRIPT, "活塞", "triggers")
 		_fallzones_checked += _count_by_script(level, FALLZONE_SCRIPT)
@@ -1098,6 +1104,25 @@ func _check_level_contract(level, path: String) -> void:
 	if goal.get("band_centre_y") != BAND_CENTRE:
 		_fail("%s GoalZone band_centre_y=%s（贴地带应为 %s）"
 			% [path, str(goal.get("band_centre_y")), str(BAND_CENTRE)])
+
+
+## D65：分组容器必须停在 (0,0)。全-kit 的坐标契约都写成「节点原点 = 贴着地面那一点」，
+## 摆图时的读数参照物是地格线；容器一带 position，它下面整块构件被平移，
+## 编辑器里看着压住 y=0 的按钮运行时其实沉在别处 —— 这种偏差在编辑器里根本看不出来，
+## 而用来核对摆位的读数已经不可信了，所以只能由守门来响。
+## 认「无脚本、还挂着东西的 Node2D」：组件实例都挂脚本，族文件夹是 type="Node"
+## （结构上就没有 position），Marker2D 那样的落点是空的，所以这条只命中真正在分组的那几个容器。
+func _check_group_containers(root: Node, path: String) -> void:
+	var by_path := {}
+	_collect_paths(root, "", by_path)
+	for node_path in by_path:
+		var node: Node = by_path[node_path]
+		if node.get_script() != null or node.get_child_count() == 0 or not (node is Node2D):
+			continue
+		var pos: Vector2 = (node as Node2D).position
+		if pos != Vector2.ZERO:
+			_fail("%s 的分组容器 %s 带位移 %s（容器该停在 (0,0)，否则它下面所有构件一起平移）"
+				% [path, node_path, str(pos)])
 
 
 func _count_by_script(node: Node, target: String) -> int:
