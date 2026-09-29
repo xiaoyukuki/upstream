@@ -1,6 +1,6 @@
 @tool
 class_name PistonBlock
-extends CharacterBody2D
+extends StaticBody2D
 ## 活塞踏板：按钮踩下时从墙/地里伸出来当落脚点，松开后快速收回。
 ## **反向档（`rest_out`，D63）** 是同一块反过来摆：没人踩着时停在满行程，踩下才收回。
 ##
@@ -41,7 +41,19 @@ extends CharacterBody2D
 ## 挤压不可能出现（"挤开"的口径）：伸出时先让**玩家自己的身体**去解算 —— 他 `move_and_collide`
 ## 撞上背后的墙就停在那儿，我们随后按他停住的位置夹住自己的前缘。于是"他推不动"和"我走不动"
 ## 是同一件事，不需要第二条挤压判定，也不需要门那套 `cast_motion` + `intersect_shape` 双探针
-## （那套是 StaticBody2D 改尺寸推不动人逼出来的，活塞推得动人）。
+## （那套是门改尺寸推不动人逼出来的；这块推得动人，靠的是 `_resolve` 里那一发 `push_by`，
+## 不是靠基类会推 —— 见下面 `StaticBody2D` 那条）。
+##
+## 基类是 **StaticBody2D（D64）**，不是 `moving_block` 那样的 CharacterBody2D。这条是承重的：
+## CharacterBody2D 每帧自己走 `move_and_slide`，就会成为"平台"，而 Godot 给骑在上面的人**附加
+## 平台速度** —— 即使这一帧我们只是写 `global_position`、即使人自己的 `velocity.y` 是零。实测
+## 签名是「收回时人以 8.53 px/拍（= `retract_speed` 512 px/s）匀速下沉，同时 `vy = 0.00`、
+## `is_on_floor() = true`」：D64③ 把 `vy` 归零之后，`is_on_floor()` 一真就开了这条通道，于是收回
+## 途中的活塞把脚下的人**拽着往下走**，直接废掉 D49 那条「收回时整个跳过：前缘正从他脚下退开」
+## 与守门里那根「收回走完时人还在半空」的钉。这块从来不用 `velocity` / `move_and_slide` /
+## `move_and_collide`，只写位置 —— 换成 StaticBody2D 就是关掉这条**文档没写的第二条运动通道**，
+## 让"人怎么动"重新只有他自己那一票。Player 那侧 `platform_floor_layers` 也试过（能治，但会连带
+## 让 `level_01_tutorial` 里骑 MovingBlock 的人不再被带着走，改成他把那块顶住），所以治在构件这头。
 ##
 ## collision_mask 写死 0：这块的位移不由物理解算，是从伸出量直接落位置。若照 `moving_block`
 ## 那样带上 terrain(1)，收回态那截身子整块埋在墙里 = 起点就重叠，而 `move_and_collide` 从重叠
@@ -139,6 +151,9 @@ var _ticks: bool = false
 
 const TRIGGER_SIGNAL: StringName = &"pressed_changed"
 const LINK_COLOR: Color = Color(1.0, 0.62, 0.2, 0.6)
+## 接触判定沿行程轴给的容差（D64）。`Rect2.intersects` 不算相切，而"挤到位、一寸也走不动"
+## 那一档长期就是相切 —— 容差补掉它，理由见 `_resolve()` 里那段。
+const CONTACT_TOLERANCE: float = 1.0
 
 ## —— 皮肤（选型图 B 青光踏板，D49 定档）。调色板固定、不提供逐实例调色，与按钮/门/残影同一条口径。
 ## 每个值都是 `tools/gen_piston_preview.py` 里那一项的 Color8 版：`darker(青,t)` = 乘 (1-t)，
@@ -243,7 +258,16 @@ func _resolve(target: Vector2) -> Vector2:
 	if hero == null or not is_out:
 		return target
 	var body: Rect2 = hero.collision_rect()
-	if not rect_at(target).intersects(body):
+	# 前缘多探一格再判接触（D64）。人头顶着天花板、块每帧想走 1 px 又被 `_resolve` 夹回 0 px
+	# 的那一档，两者长期**相切** —— 裸 intersects 一路报"没碰上"，push_by 就不再被叫，
+	# Player 那侧的「被托着」每两帧翻一次，蹲伏判据跟着抖：卡住换了个形式回来。
+	# 这一格容差不能改成"只比投影"：那会把 500 px 之外站着的人也一并推走，横向偏移得靠盒判定拦。
+	# 也不能改成"留条缝"（试过 0.1 px 的分离量）：相切正是引擎把脚判成地面的唯一一档，
+	# 拉开缝之后 `is_on_floor()` 永不成立，而 D64③ 对被托着的人钉住 `vy = 0` —— 满行程 + 宽限窗
+	# 过期那一拍他会**自己站起来顶进天花板**，连蹲走自救都做不到。相切那一档物理引擎会做小幅
+	# 分离松弛（实测沿行程轴 ±0.13 px、约 12 拍收敛），所以守门里那根"顶住不攒位移"的钉量的是
+	# 容差而不是零。
+	if not rect_at(target + _unit * CONTACT_TOLERANCE).intersects(body):
 		return target
 	# 洞口约定白送的那一项：原点的投影就是前缘，不用再补半个方块。
 	var lead: float = target.dot(_unit)

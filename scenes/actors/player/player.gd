@@ -133,6 +133,17 @@ var _grant_lifted: float = 0.0
 ## 钉住世界那道闸现在开着吗。边沿才动手，避免每帧都去写 TimeManager。
 var _grant_pinned: bool = false
 var _was_on_floor: bool = false
+## 托举宽限窗多长（D64）。0.08 s ≈ 物理步 5 拍：实测出厂速度档下 `is_on_floor()` 在块停住后
+## 0~1 拍就接回去，快档 128 px/s 要 4 拍 —— 取 5 拍刚好盖住最慢的那次交接，再多一寸就是
+## "踩空了还站着"。
+const CARRIED_GRACE_SECONDS: float = 0.08
+## 还有多久算"被东西从下面托着"（D64）。`move_and_collide` 不更新地面状态，所以被活塞托着
+## 上升时 `is_on_floor()` 一路为假 —— 这条读数补的就是那一段。由 `push_by` 在向上推那一拍续期。
+## 是一扇短窗而不是一帧旗，理由实测出来的：块走到满行程那一拍起就不再推人（它自己不动了），
+## 而"它还在托着我"不会在那一拍失效；`is_on_floor()` 要等落速攒到 1~2 px/拍才认得回脚下这块，
+## 中间那 1~4 拍里旗子一掉，蹲着的人就在顶棚底下直起身、被引擎整段弹出 2.6 px。
+## 与土狼时间同一条形状：短暂续住一个"脚有着落"的判断，窗口外一律不认。
+var _carried_remaining: float = 0.0
 ## 能力入体那一拍的提亮还剩多久（D44）。总长单独存一份是为了把亮度归一化到 0~1 再衰减。
 var _grant_glow: float = 0.0
 var _grant_glow_total: float = 1.0
@@ -186,6 +197,9 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# 托举宽限窗按物理步衰减（D64）。放在最顶上、排在死亡与演出那两个 return 之前：
+	# 这几拍里读数也要照常翻新，否则会留一条续住的窗到演出结束。
+	_carried_remaining = maxf(0.0, _carried_remaining - delta)
 	# 授予那一拍的提亮（D44）。排在死亡分支**之前**：人死在演出里时，这一档亮度也要继续走完，
 	# 不然会永久停在半亮。只改 rgb、把 .a 原样带走 —— D42 的淡出写的正是同一个 Color 的 .a。
 	if _grant_glow > 0.0:
@@ -415,7 +429,9 @@ func _try_jump() -> void:
 		return
 	if _buffer_remaining <= 0.0:
 		return
-	if not (is_on_floor() or _coyote_remaining > 0.0):
+	# D64④：被活塞托着也算站着，所以这一档里起跳放行 —— 等于"从升起的平台上跳下去"。
+	# 代价是关卡多出一发借力跳，摆图时要按"上升中的活塞上起跳"认一遍高度（手册 §8a 一条）。
+	if not (is_standing() or _coyote_remaining > 0.0):
 		return
 	_buffer_remaining = 0.0
 	_coyote_remaining = 0.0
@@ -434,6 +450,13 @@ func _apply_gravity(delta: float) -> void:
 	if is_on_floor() and velocity.y > 0.0:
 		velocity.y = 0.0
 		return
+	# D64③：被托着时落速一律不攒。这里必须用 `>=` 而不是上面那条的 `> 0.0` —— 差的就是
+	# vy 恰好为 0 那一格：攒下发 0.15 px 的下探看着没事，他却在一帧一帧往块里陷，
+	# 攒够了被引擎整段弹出来（探针里那一发 vy=-51），于是"按住下键蹲着"变成 4 帧一轮的抖动。
+	# 常规贴地那一条留在上面原样不动：那 0.15 px 的下探正是让 is_on_floor() 一直成立的力，别去碰。
+	if is_carried() and velocity.y >= 0.0:
+		velocity.y = 0.0
+		return
 	var gravity_scale: float = 1.0
 	if absf(velocity.y) < apex_speed_threshold:
 		gravity_scale = apex_gravity_multiplier
@@ -450,18 +473,22 @@ func _apply_horizontal(delta: float) -> void:
 	# 轴为 0 时走下面那条摩擦分支：被锁住的人是照物理减速停住，
 	# 比把 velocity.x 钉死更不像「撞到一堵看不见的墙」。
 	var axis: float = _horizontal_axis()
-	var on_floor: bool = is_on_floor()
+	# 被托着也算贴地（D64）：踩着一块正在升的活塞横向走，手感该跟踩在地上一样，
+	# 而不是腾空那套更软的加速/摩擦 —— 顶棚底下自救走开正是靠这一条 crisp。
+	var planted: bool = is_standing()
 	if axis != 0.0:
 		facing = 1 if axis > 0.0 else -1
-		var accel: float = ground_acceleration if on_floor else air_acceleration
+		var accel: float = ground_acceleration if planted else air_acceleration
 		velocity.x = move_toward(velocity.x, axis * move_speed, accel * delta)
 	else:
-		var fric: float = ground_friction if on_floor else air_friction
+		var fric: float = ground_friction if planted else air_friction
 		velocity.x = move_toward(velocity.x, 0.0, fric * delta)
 	_visual.scale.x = float(facing)
 
 
 func _update_floor_state(fall_speed: float) -> void:
+	# 也**故意**留在裸 is_on_floor()（D64）：这一只管的是真落地那一拍（土狼、landed 冲击），
+	# 被人托着上升时播一脚落地是反着说谎。
 	var on_floor: bool = is_on_floor()
 	if on_floor:
 		_coyote_remaining = coyote_time
@@ -474,6 +501,8 @@ func _update_floor_state(fall_speed: float) -> void:
 ## 所以不需要侧向探测 —— 探测常开会让贴墙站着的默认观感变成窄身形（D23 后果一）。
 ## 每帧重算：is_on_wall() 报的是上一次 move_and_slide() 的结果，而顶着墙时 velocity.x
 ## 每帧被碰撞削成 ~0、又被 _apply_horizontal 重新加速，所以这个读数天然逐帧刷新、不会粘住。
+## 这里**故意**不换成 is_standing()（D64）：压平读的是脚蹬地的反作用，被块托在半空时
+## 脚底下那块正在往上顶他，蹬不出这一支力。
 func _update_wall_press() -> void:
 	wall_press_dir = 0
 	if not is_on_floor() or not is_on_wall():
@@ -491,10 +520,13 @@ func _update_wall_press() -> void:
 ## 蹲伏状态机（D26）。碰撞盒随它一起缩，所以「能不能站起来」必须先问物理世界。
 ## 腾空一律不蹲（D22 的既有规则）：离地后 want 为 false，且下面的净空判定只在
 ## is_on_floor() 时才拦人 —— 从低矮处走下台阶会被放行，落下去的过程本来就在远离天花板。
+## D64② 改的是这里的"腾空"两条读法：正被活塞托着不算腾空。这一改顺带把"顶到顶头卡死"
+## 那条死局解开了 —— 净空 20 px 那一档（低于站高 30、高于蹲高 15）里他蹲得下来，
+## 蹲下去块就还能把他顶着走完，或者他自己走开。构件侧一条新判定都不加（D49 照旧）。
 func _update_crouch() -> void:
-	var want: bool = is_crouch_held and is_on_floor()
+	var want: bool = is_crouch_held and is_standing()
 	is_head_blocked = false
-	if is_crouching and not want and is_on_floor() and _head_blocked():
+	if is_crouching and not want and is_standing() and _head_blocked():
 		is_head_blocked = true
 		want = true
 	if want == is_crouching:
@@ -549,7 +581,26 @@ func collision_rect() -> Rect2:
 ## 于是"把人夹进墙里"在这个结构里不发生，构件不必写第二条挤压判定。
 ## 只改位置、绝不碰 `velocity`：他的水平速度每帧都被 `_apply_horizontal` 的加速与摩擦重写，
 ## 掺进去等于两方抢同一个数，推人的一方就再也不知道人被推走了多少。
+## D64 加的那一行也不碰 `velocity`：它只记下"这一拍有人从下面托着我"这条事实，
+## 归零落速是 `_apply_gravity` 自己读到这条事实之后做的事 —— 契约照旧成立。
 func push_by(motion: Vector2) -> void:
 	if is_dead or motion == Vector2.ZERO:
 		return
+	if motion.y < 0.0:
+		_carried_remaining = CARRIED_GRACE_SECONDS
 	move_and_collide(motion)
+
+
+## 这一拍有没有东西从下面托着他（D64）。`move_and_collide` 不更新地面状态，而被托着上升时
+## 他相对脚下的块几乎没有向下运动，`move_and_slide()` 认不出那是地面 —— 实测整段上升途中
+## `is_on_floor()` 一路为假，出厂速度档下更是每 ~12 帧真闪一次（`floor_snap_length` 默认 1 px，
+## 块每帧升 1~2 px 正好在能认出与认不出之间来回）。所以这条事实得由推他的那一方说出口。
+func is_carried() -> bool:
+	return _carried_remaining > 0.0
+
+
+## 「脚有着落」的唯一读法（D64）：真站着，或者正被托着。重力、蹲伏、起跳、皮四处都读它，
+## 不再各判各的 —— 判据散成两处就迟早出现"皮说他站着、物理说他掉着"那一类矛盾。
+## **不**包含土狼时间：那是一条会自己过期的窗口，混进来等于给"被托着"开一条隐式续命。
+func is_standing() -> bool:
+	return is_on_floor() or is_carried()

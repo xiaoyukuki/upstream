@@ -72,7 +72,7 @@ func _process(delta: float) -> void:
 ## 蹲伏时不算跑动：否则「蹲着走 → 停下 → 起身」会在起身那一刻补播一段刹车甩动，
 ## 而那段 0.19 s 的 stop 前伸 19 px，是所有剪辑里越界最狠的一帧（D23 同款理由）。
 func _track_slosh() -> void:
-	var running: bool = (_player.is_on_floor()
+	var running: bool = (_player.is_standing()
 		and absf(_player.velocity.x) > RUN_SPEED
 		and not _player.is_crouching)
 	if running == _was_running:
@@ -81,7 +81,7 @@ func _track_slosh() -> void:
 	if running:
 		_start_remaining = SLOSH_CLIP_SECONDS
 		_stop_remaining = 0.0
-	elif _player.is_on_floor():
+	elif _player.is_standing():
 		_stop_remaining = SLOSH_CLIP_SECONDS
 		_start_remaining = 0.0
 
@@ -101,7 +101,7 @@ func _track_crouch() -> void:
 		# 会一直留着，等起身时补播一段莫名的刹车。进蹲就清掉，与 _on_jumped 同一套路。
 		_start_remaining = 0.0
 		_stop_remaining = 0.0
-	elif _player.is_on_floor():
+	elif _player.is_standing():
 		_crouch_out_remaining = CROUCH_OUT_CLIP_SECONDS
 		_crouch_in_remaining = 0.0
 
@@ -133,7 +133,11 @@ func _pick() -> StringName:
 	# 窗口一过这里自动交回正常状态机 —— wake 末帧与 idle 第 0 帧同参数，接缝看不出来。
 	if _player.is_waking():
 		return &"wake"
-	if not _player.is_on_floor():
+	# 腾空判据读 is_standing() 而不是裸 is_on_floor()（D64）：被活塞从下面托着上升时
+	# `move_and_collide` 不更新地面状态，读裸的那一条会让他一边上升一边播 fall ——
+	# 而块每帧升 1~2 px 正好卡在 floor_snap_length 的认得出/认不出边界上，实测皮在
+	# idle 与 jump 之间每 12 帧来回一次，就是用户报的那一闪。
+	if not _player.is_standing():
 		if _player.velocity.y > FALL_SPEED:
 			return &"fall"
 		# 直上直下与倾斜是两套帧，判据是**起跳那一帧**的水平速度，整个腾空期不改判：

@@ -29,6 +29,9 @@ extends Node
 ##     被带着沉进地里）；行程上有人时**挤开**他，他背后有墙则他自己被挡住、方块跟着停在接触面
 ##     上走不满行程 —— 于是挤压不发生，且顶住期间不攒位移。D63 起再加一档 f：反向档 rest_out
 ##     （进树即在满行程、踩下才收回、松开慢慢回，两档速度仍绑几何；冻结无旁路；多台 OR 原样）。
+##     D64 起再加两档：**g 顶棚**（托举途中的三个过程读数：`is_standing()` 不逐帧翻、皮只挑一种
+##     剪辑、`velocity.y` 恒 0；顶到棚后块走不满且贴脚底；他能蹲走自救），**h 借力跳**（被托着
+##     时给起跳，前提那一钉先证明测的确实是"被托着"而不是地面）。
 ## 14) 粘性进度（D51）：祭坛「已耗」由游戏代码真的写进 run_state（不是守门替它写），
 ##     存档点全关卡只一台激活，且死亡重载后亮的还是死前那一台。
 ## 15) 坠落带（D52）：掉出世界这条路从无兜底改成有一根线 —— 带子只认玩家且一条命只发一次；
@@ -70,6 +73,12 @@ const BLOCK_ANCHOR := Vector2(500, -200)
 ## 不抬不行 —— 第 5 节那块地面的顶边正好落在 y=0、铺满 x -800..3200，存档点那一排（x 650~900）
 ## 就摆在它上面，人在那儿是"站着"，坠不出东西给网接。
 const OVER_VOID := Vector2(0.0, -600.0)
+## 「贴着他的后缘/脚底」这一类断言的容差（D64）。量的是容差而不是零，因为 `_resolve` 把构件
+## 夹到与玩家**相切**，而 StaticBody2D 与玩家长期相切时物理引擎会做小幅分离松弛：
+## 实测沿行程轴 5560.04 → 峰值 5560.11 → 5559.9517，约 25 拍收敛（同 D48 那根「−5e-6 px
+## 是浮点残差不是陷进去」的口径，只是这次量更大）。这条钉杀的是"攒位移 / 吃进身体"那两类
+## 真错，不钉那 0.1 px 的抖。
+const SQUEEZE_DRIFT_PX := 0.25
 
 var _fails: int = 0
 
@@ -973,11 +982,14 @@ func _test_piston() -> void:
 	_check("顶住期间方块前缘始终贴着他的后缘：挤压在这个结构里不发生",
 		absf(pusher.block_rect().end.x - (hero.global_position.x - 10.0)) < 0.6
 		and not pusher.block_rect().intersects(hero.collision_rect()))
-	var held: float = pusher.progress()
+	var end_held: float = pusher.block_rect().end.x
 	var x_held: float = hero.global_position.x
 	await _frame(30)
+	# 容差而不是零，理由见 `SQUEEZE_DRIFT_PX`。这条钉杀的是"攒位移"：积分器真漏了会走出好几像素、
+	# 脱困那一帧弹出一发。
 	_check("顶住 30 拍不攒位移（位置读回实际值，脱困那一帧不会攒出一发弹射）",
-		absf(pusher.progress() - held) < 0.001 and absf(hero.global_position.x - x_held) < 0.001)
+		absf(pusher.block_rect().end.x - end_held) < SQUEEZE_DRIFT_PX
+		and absf(hero.global_position.x - x_held) < SQUEEZE_DRIFT_PX)
 
 	hero.queue_free()
 	rig3.queue_free()
@@ -1085,6 +1097,112 @@ func _test_piston() -> void:
 		+ "伸回来的那一头正是人脚下的落脚点）", not bridge.is_out and bridge.progress() == 0.0)
 	plate_r2._set_pressed(false)
 	_check("两台全松开才转入伸回去", bridge.is_out)
+
+	# —— g：头顶有棚那一档（D64）。用户报的两件事都出在这一档：上升途中皮在 jump/idle 之间
+	##    一闪一闪，以及头一碰到棚人就卡死。所以这一档量的不是"最后到没到"，而是**过程中的读数**：
+	##    「脚有着落」不许逐帧翻、`_pick()` 挑出的剪辑不许换过、被托着时不攒落速。——
+	var rig6 := Node2D.new()
+	rig6.name = "CeilingRig"
+	add_child(rig6)
+	var plate_g := _plate_instance(rig6, "PlateG", Vector2(6200.0, -400.0))
+	var lift := _piston_instance(rig6, [plate_g], "Lift", Vector2(6200.0, 0.0), Vector2(0.0, -64.0))
+	# 棚底落在 y=-80：站高 30 时块走到 0.78 行程他就顶到，蹲高 15 时顶不到（65 > 64）。
+	_solid_box(Vector2(6200.0, -100.0), Vector2(400.0, 40.0))
+	# 地面往右再接一段：h 那一档的活塞摆在 6800，原来那块只铺到 6500。
+	_solid_box(Vector2(6700.0, 20.0), Vector2(600.0, 40.0))
+	var climber := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	climber.position = Vector2(6200.0, -Player.COLLISION_HALF_HEIGHT)
+	add_child(climber)
+	# 读 `_pick()` 而不是 `animation`：皮真正在放哪一支要等 `_process` 过一遍，而这里等的是
+	# 物理帧 —— 读前者是"这一拍该放哪一支"，与调度顺序无关，正是用户报的那一闪本身。
+	var skin := climber.get_node("Visual/Sprite") as PlayerVisual
+	await _frame(4)
+	plate_g._set_pressed(true)
+	var flips := 0
+	var bad_vy := 0
+	var clips := {}
+	var was_standing := climber.is_standing()
+	var g_frames := 0
+	while lift.progress() < 1.0 and g_frames < 120:
+		g_frames += 1
+		await get_tree().physics_frame
+		var st: bool = climber.is_standing()
+		if st != was_standing:
+			flips += 1
+		was_standing = st
+		if climber.is_carried() and not is_zero_approx(climber.velocity.y):
+			bad_vy += 1
+		clips[skin._pick()] = true
+	_check("整段托举 %d 拍：「脚有着落」一次都没翻（D64 把它收成唯一读法 is_standing()）" % g_frames,
+		flips == 0 and was_standing)
+	_check("托举期间剪辑只挑出过一种（%d 种）—— 用户报的那一闪就是它变成两种" % clips.size(),
+		clips.size() == 1)
+	_check("被托着的每一拍落速都归零（不攒重力：攒下发 0.15 px 下探会被引擎整段弹回来）",
+		bad_vy == 0)
+	_check("顶到棚之后块走不满行程（%d 拍停在 %.3f）—— 保住 D49：构件侧不加第二条判定"
+		% [g_frames, lift.progress()],
+		lift.progress() > 0.5 and lift.progress() < 1.0)
+	_check("他被棚挡住时前缘仍贴着他的脚底、不吃进身体",
+		absf(lift.block_rect().position.y - climber.collision_rect().end.y) < SQUEEZE_DRIFT_PX
+		and not lift.block_rect().intersects(climber.collision_rect()))
+	Input.action_press(&"move_down")
+	await _frame(6)
+	_check("顶住那一档他蹲得下来（D64② 的自救入口全在 Player 那侧）",
+		climber.is_crouching and not climber.is_head_blocked)
+	g_frames = 0
+	while lift.progress() < 1.0 and g_frames < 120:
+		g_frames += 1
+		await get_tree().physics_frame
+	_check("蹲下去块就还能走完（人变矮这一条白送，活塞不为此改一行）",
+		lift.progress() == 1.0)
+	Input.action_release(&"move_down")
+	await _frame(6)
+	_check("松手而他站着会顶进棚 → 保持蹲着不硬起身",
+		climber.is_crouching and climber.is_head_blocked)
+	Input.action_press(&"move_right")
+	g_frames = 0
+	while absf(climber.global_position.y + Player.COLLISION_HALF_HEIGHT) > 1.5 and g_frames < 200:
+		g_frames += 1
+		await get_tree().physics_frame
+	Input.action_release(&"move_right")
+	_check("蹲着能从他脚下走开、掉回地面重新站起来（%d 拍到 x=%.0f）—— 自救走的是这一条，"
+		% [g_frames, climber.global_position.x]
+		+ "构件侧一条判定都没加",
+		g_frames < 200 and not climber.is_crouching and not climber.is_head_blocked
+		and climber.global_position.x > 6240.0
+		and absf(climber.global_position.y + Player.COLLISION_HALF_HEIGHT) < 1.5)
+
+	# —— h：借力跳（D64④）。放在没有棚的一段上：顶棚那一档起跳会被棚拦掉，测不到"给不给跳"。——
+	var rig7 := Node2D.new()
+	rig7.name = "JumpRig"
+	add_child(rig7)
+	var plate_h := _plate_instance(rig7, "PlateH", Vector2(6800.0, -400.0))
+	var spring := _piston_instance(rig7, [plate_h], "Spring",
+		Vector2(6800.0, 0.0), Vector2(0.0, -64.0))
+	climber.global_position = Vector2(6800.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	var jumps: Array = []
+	# 数信号得往数组里塞：GDScript 的 lambda 按**值**捕获局部变量，`jumps += 1` 改的是副本，
+	# 计数器永远停在 0（本组 506 行那几条同样是这个理由）。
+	climber.jumped.connect(func() -> void: jumps.append(1))
+	plate_h._set_pressed(true)
+	g_frames = 0
+	while spring.progress() < 0.3 and g_frames < 60:
+		g_frames += 1
+		await get_tree().physics_frame
+	_check("起跳前他正被托着（这条不成立下面那条就是测了个空）",
+		climber.is_carried())
+	Input.action_press(&"jump")
+	# 三拍而不是一拍：`Input.action_press` 排进去的事件要在**下一次**主循环 flush 才成为
+	# just_pressed，只等一拍等于在他按下之前的那一拍里读跳跃（sprite_selftest 那几条同理按 4 拍）。
+	await _frame(3)
+	Input.action_release(&"jump")
+	_check("托举途中按跳跃真的起跳（D64④：被托着算站着，所以这一档放行 = 多发借力跳，%d 发 vy=%.1f）"
+		% [jumps.size(), climber.velocity.y],
+		jumps.size() == 1 and climber.velocity.y < 0.0)
+	climber.queue_free()
+	rig6.queue_free()
+	rig7.queue_free()
 	rig5.queue_free()
 	TimeManager.reset_state()
 	# 等这一组的人真的离树：第 14 组要用 get_first_node_in_group 挑玩家，留着他把回灌做在错的人身上。
