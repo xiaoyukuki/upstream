@@ -1,6 +1,7 @@
 class_name DebugOverlay
 extends CanvasLayer
-## 开发期诊断面板。仅 debug build 可见，按 REFRESH_INTERVAL 节流刷新以免每帧重建字符串。
+## 开发期诊断面板。仅 debug build 存在，且**默认隐藏**（按 T 开关）—— 这一屏每 0.1 s
+## 重建一次字符串，摆图时常驻在左上角会把那一片格线全挡住。
 ##
 ## world_time 与 physics_frames 是 M1 帧率一致性验收的客观依据：
 ## 同样墙钟时长下，限帧 30fps 与不限帧跑出的 world_time 必须基本相等。
@@ -19,8 +20,28 @@ var _accum: float = 0.0
 
 func _ready() -> void:
 	layer = LAYER_INDEX
-	visible = OS.is_debug_build()
+	visible = false
+	set_process(false)
+
+
+## DEBUG-KEY 按 T 开关这一屏。刻意不走 `main.gd` 那条 `_unhandled_input`（`dev_fps_cap`
+## 住在那儿）：面板自己开关自己，常驻根不必认识这个节点，打包时删掉这一个函数就整条断开。
+func _unhandled_input(event: InputEvent) -> void:
+	if not OS.is_debug_build():
+		return
+	if event.is_action_pressed(&"dev_overlay"):
+		toggle()
+		get_viewport().set_input_as_handled()
+
+
+func toggle() -> void:
+	visible = not visible
 	set_process(visible)
+	if visible:
+		# 立刻刷一次：不然按下去要等满 REFRESH_INTERVAL 才出字，读起来像没响应。
+		_accum = 0.0
+		_label.text = _build_report()
+		_label.modulate = _state_color()
 
 
 func _process(delta: float) -> void:

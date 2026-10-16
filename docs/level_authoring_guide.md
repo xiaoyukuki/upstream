@@ -194,9 +194,11 @@ Player `mask = 5`（terrain + time_solid）。传感器一律 `layer = 8, mask =
 
 | 怎么跑 | 结果 |
 |---|---|
-| F5 | 跑 `main.tscn` → 装载 `Main.level_scene`。**当前 demo 已把它指向 `scenes/levels/level_1/level1.tscn`**；留空时退到 `INITIAL_LEVEL`（引导关）。有冻结滤镜（CRT）与调试面板 |
+| F5 | 跑 `main.tscn` → 装载 `Main.level_scene`。**当前 demo 已把它指向 `scenes/levels/level_1/level1.tscn`**；留空时退到 `INITIAL_LEVEL`（引导关）。有冻结滤镜（CRT）与调试面板（**默认隐藏，按 T 开**） |
 | 选中 Main 根 → `level_scene` 指向你的关 | F5 跑你的关，overlay 与 `run_state` 齐全。**推荐** |
 | F6 | 只跑当前打开的场景，绕过 Main → 没有冻结滤镜（D46 之后那是一层 CRT，不是灰纱）、没有调试面板、按 R 重开无效；**更要紧的是 `run_state` 整条不在场：踩存档点不记位置、死了直接回出生点，且只在开局 `push_warning` 一次**（D31/D42 之后这条不再是"少个滤镜"那么无害）。**也不演开局苏醒**（D57：那一拍是 `LevelBase` 问常驻根要来的，绕过 Main 就没有人记账，想看这一拍必须 F5）。适合快速验几何，不适合验进度 |
+
+**调试面板的两个键**：`T`（动作 `dev_overlay`）开关那一屏读数，`F11`（`dev_fps_cap`）切 30 fps 限帧。面板**默认隐藏**是 2026-09-29 定的：它常驻左上角会把那一片格线全挡住，而摆图时看格线是主业。两条都只在 debug build 里有效（`OS.is_debug_build()`），出货包按 T 没反应；开关逻辑住在 `debug_overlay.gd` 自己身上、打了 `DEBUG-KEY` 标记，打包时删掉那一个函数就整条断开（刻意不并进 `main.gd` 那条 `_unhandled_input`，那样常驻根就得认识这个节点）。
 
 日志：`C:\Users\28401\AppData\Roaming\Godot\app_userdata\upstream\logs\godot.log`（每次启动覆写，上一份归档成带时间戳的同名文件）。
 关卡前缀 `[m2]` / `[level]`，字段含义：`plate=true presses=3 world=12.4` 里 `world` 是**世界时间**（冻结期间不走），正是"玩家花了多久"的度量。

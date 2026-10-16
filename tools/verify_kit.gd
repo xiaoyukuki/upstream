@@ -260,8 +260,12 @@ func _verify_ready_geometry() -> void:
 	var button_shape = button.get_node("CollisionShape2D")
 	if button_shape.position != Vector2(0, BAND_CENTRE):
 		_fail("ButtonPlate band centre=%s (expect %s)" % [str(button_shape.position), str(BAND_CENTRE)])
-	if button_shape.shape.size != Vector2(64, 24):
-		_fail("ButtonPlate band size=%s" % str(button_shape.shape.size))
+	# 带子尺寸钉的是**派生式**而不是某个字面量：`width` 是手感旋钮（2026-09-29 他从 64 拧到 48，
+	# 旧写法当场红一条），抄第二份数等于把默认值当契约 —— 同 D48 的 `KILL_INSET`、D53 的 `denied_time`。
+	# 这一钉真正要挡的是"改了 `width`/`sensor_height` 而带子没跟着重算"。
+	if button_shape.shape.size != Vector2(button.width, button.sensor_height):
+		_fail("ButtonPlate band size=%s，不是 width×sensor_height=%s（派生几何没跟上）"
+			% [str(button_shape.shape.size), str(Vector2(button.width, button.sensor_height))])
 	# D25：立绘改由 _draw() 平铺零件，占位 Polygon2D 留着就会画在立绘上面。
 	for reskinned in [door_a, button]:
 		if reskinned.get_node_or_null("Visual") != null:

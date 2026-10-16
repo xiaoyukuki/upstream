@@ -41,6 +41,12 @@ PAL = G.STYLES[G.SHIPPED]
 # 液滴的发射参数：角度（度，0 = 正右，逆时针为负）、初速（世界像素/秒）、大小。
 # 与引擎里同一条算式：p = p0 + v*t + 0.5*g*t^2，g = 900 px/s^2，落回地面即收。
 DRIP_G = 900.0
+# D 行（= 今天实装那一版）的收缩三个数。D66 那张重排候选图 import 这一份，
+# 所以"现状那一行"与引擎里那条式子不可能各说各话。
+SHRINK_SPAN = 0.6      # player.gd DEATH_SHRINK_SPAN
+SHRINK_MIN = 0.12      # player.gd DEATH_SHRINK_MIN
+SHRINK_RISE = 12.0     # player.gd DEATH_RISE
+FADE_FROM = 0.55       # player.gd DEATH_FADE_FROM
 SPLASH_A = [(-162, 96, 3), (-134, 132, 2), (-108, 158, 4), (-84, 176, 3),
             (-58, 160, 2), (-32, 132, 3), (-8, 104, 4), (16, 78, 2),
             (152, 100, 3), (190, 82, 2)]
@@ -103,12 +109,15 @@ def blob(size):
     return _BLOBS[size]
 
 
-def splash(cell, t, spec, origin_y, spread=1.0):
+def splash(cell, t, spec, origin_y, spread=1.0, alpha_t=None):
     """液滴弹道：从脚底上方 origin_y 世界像素射出，画在身体之前（身体压在上面）。
     p = p0 + v*t + 0.5*g*t^2，落回牙根线即收 —— 与引擎里会写的那条算式同源。
+    **t 的单位是秒**（引擎 `_death_elapsed` 就是秒），淡出用 `alpha_t`（整拍的成数，
+    引擎那边是 `progress`）；不给 alpha_t 就沿用 t，D42 那张图的原样输出因此一字不变。
     画在一张独立层上再合成，淡出才是真的淡，而不是把像素直接抠掉。"""
     layer = Image.new("RGBA", cell.size, (0, 0, 0, 0))
     ox, oy = CELL_W / 2.0, FLOOR - origin_y
+    ta = t if alpha_t is None else alpha_t
     for ang, v0, size in spec:
         rad = math.radians(ang)
         vx, vy = math.cos(rad) * v0 * spread, math.sin(rad) * v0 * spread
@@ -116,7 +125,7 @@ def splash(cell, t, spec, origin_y, spread=1.0):
         y = round(oy + vy * t + 0.5 * DRIP_G * t * t)
         if y > FLOOR - size or x < 0 or x > CELL_W - size - 2:   # 落回地面 / 出画就收
             continue
-        a = 1.0 if t < 0.55 else max(0.0, 1.0 - (t - 0.55) / 0.45)
+        a = 1.0 if ta < FADE_FROM else max(0.0, 1.0 - (ta - FADE_FROM) / (1.0 - FADE_FROM))
         layer.alpha_composite(fade(blob(size).copy(), a), (x, y))
     cell.alpha_composite(layer)
 
@@ -126,12 +135,19 @@ def squash_of(t):
     return 1.0 + 0.55 * k, 1.0 - 0.66 * k
 
 
-def cell_for(kind, t):
+def backdrop():
+    """单元格底片：实验室墙地 + 中间一段尖刺。后来重排死亡那一拍的候选（D66）复用同一个底片，
+    所以两代对照图的地面线、牙高、配色都是同一份，不许在新脚本里重画第二张。"""
     terrain = G.build_terrain_atlas(PAL)
     decor = G.build_decor_atlas(PAL)
     cell = P.context_strip(PAL, terrain, decor, CELL_W, CELL_H, FLOOR)
     unit = P.part_spikes(PAL, 1, 14)
     P.paint_spikes(cell, unit, (CELL_W - 48) // 2, FLOOR, 48)
+    return cell
+
+
+def cell_for(kind, t):
+    cell = backdrop()
 
     if kind == "now":
         frame, pos = body_frame(t, 1.0, 1.0, 1.0)
@@ -174,12 +190,12 @@ def cell_for(kind, t):
         cell.alpha_composite(frame, pos)
         return cell
 
-    # D：等比缩成一个点 + 一圈爆裂
-    k = ease_out(min(t / 0.6, 1.0))
-    s = max(0.12, 1.0 - 0.88 * k)
-    alpha = 1.0 if t < 0.55 else max(0.0, 1.0 - (t - 0.55) / 0.45)
+    # D：等比缩成一个点 + 一圈爆裂（数值即 player.gd 那四个 DEATH_* 常量）
+    k = ease_out(min(t / SHRINK_SPAN, 1.0))
+    s = max(SHRINK_MIN, 1.0 - (1.0 - SHRINK_MIN) * k)
+    alpha = 1.0 if t < FADE_FROM else max(0.0, 1.0 - (t - FADE_FROM) / (1.0 - FADE_FROM))
     splash(cell, t, SPLASH_D, 12.0, spread=1.15)
-    frame, pos = body_frame(t, s, s, alpha, lift=12.0 * k)
+    frame, pos = body_frame(t, s, s, alpha, lift=SHRINK_RISE * k)
     cell.alpha_composite(frame, pos)
     return cell
 
