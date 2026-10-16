@@ -1798,9 +1798,9 @@ func _test_grant_d61() -> void:
 		float(Player.GRANT_BURST_FRAME) / float(Player.GRANT_FRAMES)],
 		is_equal_approx(AbilityAltar.FLY_END,
 			float(Player.GRANT_BURST_FRAME) / float(Player.GRANT_FRAMES)))
-	_check("青环散完 == 光柱散帧的最后一帧（裁定过「青环和光束同帧」）",
-		is_equal_approx(AbilityAltar.RING_END,
-			float(Player.GRANT_BURST_FRAME + GrantBeams.DISOLVE_FRAMES) / float(Player.GRANT_FRAMES)))
+	# 「青环散完 == 光柱散帧最后一帧」那条对表钉随那三枚环一起删掉（2026-09-29 用户裁定去掉环）。
+	# 散开那一档现在只有 `GrantBeams.DISOLVE_FRAMES` 一个书写者，没有第二处可对照 ——
+	# 若哪天又给"散完"立第二个常量（不管叫什么），这条位置就该重新钉一次。
 	_check("胸口只有一个定义（祭坛引用玩家那一份，不留第二份）",
 		is_equal_approx(AbilityAltar.CHEST_Y, Player.CHEST_Y))
 	_check("钉住窗口按默认 grant_time 折算 ≈ 1.25 s（A3）",

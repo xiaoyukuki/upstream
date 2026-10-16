@@ -9,9 +9,11 @@ extends Area2D
 ## 之所以不烤成一张整图：`width` / `altar_height` 是摆图时正在用的活旋钮
 ## （`level_1` 用的就是 47×38），整图会让这两个值失效、加载时还报未知属性 —— 与 `Door` 同一条理由。
 ##
-## 授予那一拍（D44 立，D61 整段重做）：核心浮起 → 飞进玩家胸口 → 三枚青色菱形环向外扩散淡出。
+## 授予那一拍（D44 立，D61 整段重做）：核心浮起 → 飞进玩家胸口。胸口那三枚青色菱形环
+## **已于 2026-09-29 按用户裁定删掉**（他说那一拍里"角色中间的蓝色空心四边形"要去掉），
+## 散开那一档从此只由 `GrantBeams` 那十二根光柱承担；D44 / D61 里提到环的句子是历史。
 ## 现在这一拍里玩家同时被举起来（`Player.begin_grant()`），所以胸口那条线是**动的**：
-## 飞行与环的落点都按 `_courier.global_position` 现算，不是按踩上祭坛那一帧的死坐标。
+## 飞行段的落点按 `_courier.global_position` 现算，不是按踩上祭坛那一帧的死坐标。
 ## **整段跑真实物理 delta**，刻意不查 `TimeReceiver`：踩上祭坛那一刻玩家通常在跑，而能力 arm
 ## 的时机按 D16「静止即启」要等到他停下 —— 这两条通道里世界随时可能是 FROZEN，演出若吃世界
 ## delta 就会卡在半途，而这一拍最需要的是"不管世界怎样都一定演完"。
@@ -43,7 +45,7 @@ signal ability_granted
 		sensor_height = value
 		_rebuild()
 
-## 授予那一拍的总长。三段的比例写死在下面 FLY_END / RING_END 两个分数里，
+## 授予那一拍的总长。核心到位的时刻写死在下面的 `FLY_END` 这一个分数里，
 ## 这个旋钮整体缩放节奏 —— 但**不能随便拧**：D61 起同一拍还有皮（`grant` 剪辑 16 帧 / 3.2 fps）、
 ## 举升曲线与光柱，三处都按 `t × 16 帧` 读同一张时间表，填了别的数就是"画面在演另一拍"。
 ## 那笔账由 kit_selftest 第 20 组钉着（默认值 5.0 = 16 / 3.2 必须成立）。
@@ -56,8 +58,10 @@ const TEX_GROOVE: Texture2D = preload("res://assets/props/altar_groove.png")
 const TEX_BURN: Texture2D = preload("res://assets/props/altar_burn.png")
 const TEX_CORE: Texture2D = preload("res://assets/props/altar_core.png")
 
-## 环与核心的青色：与 props.json 的 altar_core 同源（verify_kit 比对）。
+## 核心的青色：与 props.json 的 altar_core 同源（verify_kit 逐色比对）。
 ## 旧版这里是构件自己的一串琥珀字面量、从来不在清单里 —— D44 订正掉的就是它。
+## 2026-09-29 那三枚环删掉之后，代码里读它的地方没了，但**这条声明别跟着删**：
+## 它是"祭坛那团青 == 清单里那个色"这条账在构件侧的落点（`tools/gen_props.py` 的注释指回这里）。
 const CORE_COLOR: Color = Color(0.431373, 0.901961, 0.941176)
 
 ## 石台各件的摆位 —— 必须与 tools/gen_props.py 的 `paint_altar_steps` 逐像素一致。
@@ -68,22 +72,15 @@ const SLOT_AT: Vector2 = Vector2(-9.0, 3.0)        # 居中件左上角 = (cx-9,
 const CORE_AT: Vector2 = Vector2(-14.0, -17.0)     # 核心件左上角 = (cx-14, top_y-17)
 const CORE_CENTER: Vector2 = Vector2(14.0, 8.0)    # 28×16 那张里菱形的中心
 
-## 节拍：核心在爆发前一帧到位（9/16 = 0.5625），环在 12/16 = 0.75 处散完。
-## 这两个分数就是"第 9 帧"和"第 12 帧"，与 `Player.GRANT_BURST_FRAME` 那张时间表同一格 ——
-## 爆发那一拍要求四件事同帧发生（核心进胸、光柱铺满、环散开、世界钉住），分数写歪一格就错开一档。
+## 节拍：核心在爆发那一帧到位（9/16 = 0.5625）。这个分数就是"第 9 帧"，与
+## `Player.GRANT_BURST_FRAME` 那张时间表同一格 —— 爆发那一拍要求三件事同帧发生
+## （核心进胸、光柱铺满、世界钉住），分数写歪一格就错开一档。
 const FLY_END: float = 0.5625
-const RING_END: float = 0.75
 const CORE_LIFT: float = 7.0     # 飞出去前先往上浮这么多（一条 sin 弧，不设中间关键点）
-## 胸口 = 玩家原点上方 3 px。住在 Player 那边（`Player.CHEST_Y`）：光柱的顶点、三枚环的心、
-## 核心的落点是同一个点，一个数只能有一处定义。
+## 胸口 = 玩家原点上方 3 px。住在 Player 那边（`Player.CHEST_Y`）：光柱的顶点与核心的落点
+## 是同一个点，一个数只能有一处定义。
 const CHEST_Y: float = Player.CHEST_Y
 const GLOW_TIME: float = 0.95    # 身体亮那一档，总长 = 选型图里 9/10/11 那三帧（3 × 0.3125 s）
-const RING_STEP: float = 0.30    # 三枚环彼此错开这么多（与选型图 `_rings_new` 同一条错拍）
-## 环的半径区间（世界 px）。D44 那版是 6→26；D61 铺到 90 = 约三倍身位，因为同一拍里
-## 光柱已经顶到屏幕边缘，环若还是原来那一圈就退化成"身体上的一个点"，读不出"散出去"。
-const RING_R0: float = 6.0
-const RING_R1: float = 90.0
-const RING_ALPHA: float = 0.95
 
 ## 本条命内已授予过：一次性。复活回灌走 `mark_spent()`，不重播那一拍。
 var is_granted: bool = false
@@ -186,25 +183,10 @@ func _draw() -> void:
 func _draw_flight(h: float) -> void:
 	var total := maxf(grant_time, 0.001)
 	var t := clampf(_grant_elapsed / total, 0.0, 1.0)
-	var chest := to_local(_courier.global_position + Vector2(0.0, CHEST_Y))
 	if t < FLY_END:
+		var chest := to_local(_courier.global_position + Vector2(0.0, CHEST_Y))
 		var k := t / FLY_END
 		var pos := Vector2(CORE_AT.x, -h + CORE_AT.y).lerp(chest - CORE_CENTER,
 			k * k * (3.0 - 2.0 * k))
 		pos.y -= sin(k * PI) * CORE_LIFT
 		draw_texture(TEX_CORE, pos)
-	if t < RING_END:
-		# 三枚同形状的环错开出发：菱形就是核心本来的形状，"从身体里散出来"和"这颗核心"
-		# 因此是同一个图形语言，不需要为新演出另立造型。
-		for i in 3:
-			var k := clampf((t - FLY_END) / (RING_END - FLY_END) + float(i) * RING_STEP,
-				0.0, 1.0)
-			_draw_ring(chest, RING_R0 + k * (RING_R1 - RING_R0), (1.0 - k) * RING_ALPHA)
-
-
-func _draw_ring(center: Vector2, r: float, alpha: float) -> void:
-	var pts := PackedVector2Array([
-		center + Vector2(0.0, -r), center + Vector2(r * 0.7, 0.0),
-		center + Vector2(0.0, r), center + Vector2(-r * 0.7, 0.0),
-		center + Vector2(0.0, -r)])
-	draw_polyline(pts, Color(CORE_COLOR.r, CORE_COLOR.g, CORE_COLOR.b, alpha), 2.0)

@@ -1936,7 +1936,7 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 
 **⑤ 所有权（这一条的根）**：`Player.begin_grant(duration)` / `is_granting()` / `grant_progress()`。`AbilityAltar` 只剩两件事：发 `ability_granted`（契约一字未动）+ 把时长递给玩家（`_courier.begin_grant(grant_time)`）。`grant_progress()` 是这一拍的**唯一进度事实**，祭坛的环、身体的发光、玩家自己的举升、光柱的长度全读它。
 
-**时长同源（这一条的核心纪律，`kit_selftest` 第 20 组前七钉全在这里）**：`grant_time` 不是手感数值，它是**剪辑长度** —— 16 帧 / 3.2 fps = 5.0 s 整。于是钉下去的一串等式：`Player.GRANT_FRAMES == 剪辑帧数`、`GRANT_LIFT.size() == 帧数`、`AbilityAltar.FLY_END == 9/16`（核心进胸那一帧**就是**爆发那一帧）、`RING_END == (9+3)/16`（青环散完 = 光柱散三帧的最后一帧，"青环和光束同帧"那条裁定的算术形状）、`CHEST_Y` 只有一处定义（祭坛 `const CHEST_Y = Player.CHEST_Y`）、`GRANT_PIN_FRAMES/16 × 5.0 == 1.25`。**为什么值得钉这么多条**：抄错不崩、不报错，只是皮与曲线在某一帧悄悄错开半拍，而那只有逐帧回放才看得见。
+**时长同源（这一条的核心纪律，`kit_selftest` 第 20 组前七钉全在这里）**：`grant_time` 不是手感数值，它是**剪辑长度** —— 16 帧 / 3.2 fps = 5.0 s 整。于是钉下去的一串等式：`Player.GRANT_FRAMES == 剪辑帧数`、`GRANT_LIFT.size() == 帧数`、`AbilityAltar.FLY_END == 9/16`（核心进胸那一帧**就是**爆发那一帧）、~~`RING_END == (9+3)/16`~~（**2026-09-29 随那三枚环一起删**，见本节末的订正）、`CHEST_Y` 只有一处定义（祭坛 `const CHEST_Y = Player.CHEST_Y`）、`GRANT_PIN_FRAMES/16 × 5.0 == 1.25`。**为什么值得钉这么多条**：抄错不崩、不报错，只是皮与曲线在某一帧悄悄错开半拍，而那只有逐帧回放才看得见。
 
 **② B2 举升为什么按帧标**：`GRANT_LIFT` 是 16 个"脚底离祭坛帽顶的世界 px"，帧时刻之间线性插值。不选"速度 + 重力积分"，是因为他要的是**图里那一帧的高度 == 游戏里那一帧的高度**（D53「图赢过口头裁定」的延续 —— 前提是图真的等于游戏）。
 
@@ -1971,6 +1971,8 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 **交付**：`tools/gen_player_frames.py`（两个旋钮 + `FRAMES["grant"]` 16 帧 + `CLIPS` 的 fps/逐帧时长）、`assets/player/slime/grant_{0..15}.png`（含 `.png.import`）与重出的 `wake_*.png`、`clips.json` / `slime_frames.tres`（重建，`uid_kept=true`，他那格 `"duration": 2.0` 原样在位）、`tools/build_slime_frames.gd`（逐帧时长回写）、`scenes/actors/player/{player.gd, player_visual.gd, grant_beams.gd}`、`autoloads/time_manager.gd`、`scenes/objects/ability_altar/ability_altar.gd`、`tools/{sprite_selftest.gd, kit_selftest.gd, gen_grant_preview.py}`、评审件 `assets/player/preview_grant_{w12,sheet,burst,beams,timeline}.png` 与 `preview_grant_{w12,anim,final,beams,spin}.gif`。
 
 **How to apply**：一，**演出要么归构件，要么归被演的那个人，别留第三态**。D44 把"人得到能力"这一拍放在祭坛身上，代价就是人不能动 —— 构件动不了别人的身体。以后凡是"这个角色身上发生了什么事"的演出（被举起、被推开、被点亮），入口都放在被演者身上，构件只**叫一声 + 递时长**，而"这一拍走到哪"的唯一读数由被演者持有。第二，**新增任何"钉住世界"的窗口，必须同时回答"松手时世界该停在哪个状态"** —— 这个陷阱没有编译期症状，红的是手感；本-kit 的意图通道有两条静音条件（能力未开、已被钉住），所以"清开关"与"再报一次意图"**都不等于**"接回现实"。第三，**图与游戏同源到"图反过来读代码"这一档才算真同源**：`gen_grant_preview.py` 现在读 `FRAMES["grant"]` 与 `player.gd::GRANT_LIFT`，重出的已批选型图与旧件**逐字节相同**（md5 对过）—— 这比"我照着抄了一遍"强，因为它把"改了游戏忘了图"这条路直接封死。第二，**破坏性改名可以选，但要当着用户的面选**：把"你已摆好的 N 处要重做"这条代价写进菜单，让他自己称一次；他点头之后再由他把那一处一处改回来 —— 我替他改关卡文件等于把他手上正在进行的摆图和我的迁移脚本混成一坨。
+
+**订正（2026-09-29，用户实机看完这一拍之后的一句话）**：「关于获得能力时的动画，我希望去掉动画过程中角色中间的蓝色空心四边形」—— **胸口那三枚青色菱形环整块删掉**（`ability_altar.gd` 的 `_draw_ring()`、`RING_END` / `RING_STEP` / `RING_R0` / `RING_R1` / `RING_ALPHA` 五个常量、`_draw_flight()` 里那一段循环）。散开那一档从此**只由 `GrantBeams` 那十二根光柱承担**，核心飞行、举升曲线、爆发那一帧钉住世界、身体亮那一档**一律未动**，`grant_time` 与皮的对表账照旧成立。三条连带记账：① `kit_selftest` 第 20 组那条 **`RING_END` == 光柱散帧最后一帧的对表钉随之删除** —— 不是放松，是**没有第二处可对照了**（"散完"现在只有 `GRANT_BURST_FRAME + DISOLVE_FRAMES` 一个书写者），钉的位置留了一行注释，将来谁再为"散完"立第二个常量就该重新钉；② `CORE_COLOR` 这个常量**保留**，虽然删掉环之后代码里再没人读它 —— 它是"祭坛那团青 == `props.json` 的 `altar_core`"这条同源账在构件侧的落点（`verify_kit:899` 逐色比对、`gen_props.py` 的注释指回这里），删了等于把一条账弄丢；③ 本节上面「环的线宽保持 2.0 世界 px」那条、以及 D44 / D54 里提到「三枚环」的句子**从此都是历史**（D54 那条"彩蛋不复用祭坛那套语言"的裁定本身不受影响，那套语言的核心是"飞入体内"）。**契约变更：零**（无新信号、无新导出项、无新常量、关卡文件不用动）。
 
 ### D62 · 第一次获得能力时在祭坛那一格自动存一次档（只写重生位、不给灯）
 
