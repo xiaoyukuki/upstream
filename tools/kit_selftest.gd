@@ -64,6 +64,12 @@ extends Node
 ##     之前那台存档点被顶灭、`respawn_marker` 整个抹掉（留着下次重载会点亮一台已经不成立的台）；
 ##     跳着撞进触发带的那一次**不存**（写进去的是一格空气），而且落地之后也不补写。
 ##     这一组故意不给祭坛灯：它不发 `checkpoint_reached`，所以"没台亮着"这条要能被钉住。
+## 22) 时间锚点（D68）：一次一根、E 强回收、目标的时间源跟玩家的手而不是世界钟 ——
+##     发射键的瞄准/出膛链通着；出膛只认实体、非锚点族撞上即收；吸附中第二发无效；
+##     按着方向键时世界冻着目标照走，人站着时世界流着目标照停；撒手当帧就停、不等
+##     世界那道 0.08 s 缓冲；E 当帧断链、目标立刻回世界钟且相位不被清；回执亮格是 wound
+##     的纯函数（纯装饰）；回程不理碰撞，目标被释放从最后一格收回；死亡断链、复活回手上，
+##     全程不进 run_state。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -265,6 +271,7 @@ func _ready() -> void:
 	await _test_world_clock()
 	await _test_grant_d61()
 	await _test_altar_save()
+	await _test_time_anchor()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -2002,6 +2009,310 @@ func _test_altar_save() -> void:
 	await _frame(2)
 
 
+## 第 22 组：时间锚点（D68）。只走生产入口 —— 玩家身上那根 `TimeAnchor` + 真实 Input 动作，
+## 不直接调 `_attach()`。最容易「改坏了不响」的四件事：① 时间源跟的是玩家的手，不是世界钟；
+## ② 吸附/回收不碰目标自己的相位；③ E 当帧断链（目标立刻回世界钟）；④ 回程不理碰撞。
+func _test_time_anchor() -> void:
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(3)
+
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+
+	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker.position = Vector2(100.0, -Player.COLLISION_HALF_HEIGHT)
+	add_child(walker)
+	var block := load("res://scenes/objects/moving_block/moving_block.tscn").instantiate() as MovingBlock
+	block.position = Vector2(300.0, -32.0)
+	block.travel_offset = Vector2(0.0, -96.0)
+	add_child(block)
+	await _frame(3)
+
+	var anchor: TimeAnchor = walker.time_anchor()
+	var receiver: TimeReceiver = block.get_node("TimeReceiver") as TimeReceiver
+	_check("锚挂在玩家身上、开局在手上；方块在 anchorable 族里且挂着 TimeReceiver",
+		anchor != null and anchor.current_state() == TimeAnchor.State.IDLE
+		and not anchor.has_link() and block.is_in_group(&"anchorable") and receiver != null)
+
+	# —— ① 发射键的整条链：按住瞄准、松开出膛。落点由鼠标决定，这里只验"真的打出去了"。 ——
+	Input.action_press(&"anchor")
+	await _frame(3)
+	_check("按住发射键进入瞄准", anchor.is_aiming())
+	Input.action_release(&"anchor")
+	var fired := false
+	var guard := 0
+	while guard < 40:
+		guard += 1
+		await _frame(1)
+		if anchor.current_state() != TimeAnchor.State.IDLE:
+			fired = true
+		elif fired:
+			break
+	_check("松开即发射，飞完/收回之后回到手上", fired
+		and anchor.current_state() == TimeAnchor.State.IDLE)
+
+	# —— ② 能力闸：没开能力连出膛都不允许（复位走 TimeManager 自己那条链）。 ——
+	TimeManager.set_ability_enabled(false)
+	_check("能力没开时发不出去", not anchor.fire_toward(Vector2.RIGHT))
+	TimeManager.set_ability_enabled(true)
+
+	# 世界冻着起飞：飞行只吃真实 delta，目标那一整段没人能推 —— 吸附前后读到同一个相位，
+	# 「吸附不碰它自己的相位」才有干净对照。
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_anchor_reset_target(block)
+	# 给一个**非零且显眼**的相位：吸附若偷偷把它清回 0，下面那条断言当场红。
+	block.elapsed_path_time = 5.0
+	var phase_before: float = block.elapsed_path_time
+	_check("在射程内出手，锚出膛", anchor.fire_toward(Vector2.RIGHT)
+		and anchor.current_state() == TimeAnchor.State.OUTBOUND)
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("飞行段命中锚点族：吸附在方块上", anchor.current_state() == TimeAnchor.State.ATTACHED
+		and anchor.attached_target() == block)
+	_check("吸附不碰目标自己的相位（没被清回 0）",
+		block.elapsed_path_time == phase_before and phase_before > 0.0)
+	_check("锚插在目标身上（跟着目标原点走）",
+		anchor.global_position.distance_to(block.global_position) < block.block_size.x)
+
+	# —— ③ 一次一根：吸附中再按发射键什么都不发生（连瞄准线都不该出现）。 ——
+	_check("吸附中第二发无效", not anchor.fire_toward(Vector2.RIGHT))
+	Input.action_press(&"anchor")
+	await _frame(3)
+	Input.action_release(&"anchor")
+	_check("吸附中按发射键不改状态、不进入瞄准",
+		anchor.current_state() == TimeAnchor.State.ATTACHED and not anchor.is_aiming())
+
+	# —— ④ 供时：世界冻着、手上有方向 → 锚点物照走；世界流着、人站着 → 照停。
+	#       正反两面合起来才排得掉「其实吃的是世界 delta」这条假绿。
+	Input.action_press(&"move_right")
+	guard = 0
+	while receiver.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	var pos_before: Vector2 = block.global_position
+	var phase_pumped: float = block.elapsed_path_time
+	var wound_before: float = anchor.receipt_wound()
+	_check("世界冻着、按着方向键：锚点物拿到真实 delta",
+		TimeManager.is_time_frozen() and receiver.get_physics_delta() > 0.0)
+	await _frame(10)
+	_check("同一段里方块真的在走、相位与回执一起涨",
+		block.global_position.distance_to(pos_before) > 1.0
+		and block.elapsed_path_time > phase_pumped and anchor.receipt_wound() > wound_before)
+
+	# 回执是纯装饰：亮格是 wound 的纯函数，改它不反向影响时间源。四个可读档比一份抄来的算式好懂。
+	var live_wound: float = anchor.receipt_wound()
+	var probe_ok := true
+	for sample in [
+		[0.0, 0],
+		[TimeAnchor.RECEIPT_PERIOD * 0.5, int(float(TimeAnchor.RECEIPT_TICKS) * 0.5)],
+		[TimeAnchor.RECEIPT_PERIOD, 0],
+		[TimeAnchor.RECEIPT_PERIOD * 1.25, int(float(TimeAnchor.RECEIPT_TICKS) * 0.25)],
+	]:
+		anchor.set("_wound", sample[0])
+		probe_ok = probe_ok and anchor.receipt_index() == sample[1]
+	anchor.set("_wound", live_wound)
+	_check("回执相位：0 圈 → 0 格、半圈 → 6 格、整圈归零、1.25 圈 → 3 格", probe_ok)
+	await _frame(2)
+	_check("回执只是装饰：拧它的相位不会停掉时间源",
+		receiver.get_physics_delta() > 0.0 and anchor.receipt_wound() > live_wound)
+
+	# —— ⑤ 撒手当帧就停：不等世界那道 0.08 s 缓冲。等世界真的流起来、人还站着，
+	#       它照样不动 —— 这一条才把「跟手」与「跟世界」分开。 ——
+	Input.action_release(&"move_right")
+	await _frame(3)
+	_check("撒手后锚点物立刻不再吃 delta", receiver.get_physics_delta() == 0.0)
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：松手缓冲走完，世界重新在流动", TimeManager.get_physics_delta() > 0.0)
+	var pos_still: Vector2 = block.global_position
+	var phase_still: float = block.elapsed_path_time
+	var wound_still: float = anchor.receipt_wound()
+	await _frame(10)
+	_check("世界流着、人站着：锚点物照旧不动（时间源跟的是手，不是世界钟）",
+		receiver.get_physics_delta() == 0.0 and block.global_position == pos_still
+		and block.elapsed_path_time == phase_still and anchor.receipt_wound() == wound_still)
+
+	# —— 移动锁（苏醒/授予那一拍的现成读法）：锁一上，手上有方向也不供时。 ——
+	Input.action_press(&"move_right")
+	guard = 0
+	while receiver.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	walker.movement_locked = true
+	await _frame(1)
+	_check("移动锁掐住手：锚点物立刻停", receiver.get_physics_delta() == 0.0)
+	walker.movement_locked = false
+	await _frame(1)
+	_check("解锁后接着供时（锁不是一次性开关）", receiver.get_physics_delta() > 0.0)
+	Input.action_release(&"move_right")
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+
+	# —— ⑥ E 强回收：当帧断链，目标立刻回世界钟；回程只是视觉，相位不被清。 ——
+	var phase_at_recall: float = block.elapsed_path_time
+	Input.action_press(&"interact")
+	await _frame(3)
+	Input.action_release(&"interact")
+	_check("E 回收：状态转回程、链接当帧断开", anchor.current_state() == TimeAnchor.State.RETURNING
+		and not anchor.has_link() and anchor.attached_target() == null)
+	await _frame(2)
+	_check("回收后目标立刻回世界钟（世界流着，它自己接着走）",
+		receiver.get_physics_delta() > 0.0 and block.elapsed_path_time > phase_at_recall)
+	_check("回收不清目标相位（不是回到 0 重新开始）", block.elapsed_path_time > 0.0)
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("回程到手上：回 IDLE", anchor.current_state() == TimeAnchor.State.IDLE
+		and anchor.global_position.distance_to(
+			walker.global_position + Vector2(0.0, Player.CHEST_Y)) < 1.0)
+
+	# —— ⑦ 飞行中 E、撞墙、非锚点族的实体、打空：都回手上，且都不产生链接。 ——
+	_check("对准天空出膛", anchor.fire_toward(Vector2.UP))
+	await _frame(3)
+	_check("前提：这一发还在飞", anchor.current_state() == TimeAnchor.State.OUTBOUND)
+	Input.action_press(&"interact")
+	await _frame(3)
+	Input.action_release(&"interact")
+	_check("半路 E 收回：没有吸附任何东西", not anchor.has_link()
+		and anchor.current_state() != TimeAnchor.State.OUTBOUND)
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("半路收回的锚回到手上", anchor.current_state() == TimeAnchor.State.IDLE
+		and not anchor.has_link())
+
+	var wall := _solid_box(Vector2(260.0, -18.0), Vector2(2.0, 40.0))
+	await _frame(1)
+	_check("射线上立一堵 2 px 的墙", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("撞墙不吸附、自动收回（2 px 也不穿）",
+		anchor.current_state() == TimeAnchor.State.IDLE and not anchor.has_link())
+	wall.queue_free()
+	await _frame(2)
+
+	var door := load("res://scenes/objects/door/door.tscn").instantiate() as Door
+	door.position = Vector2(220.0, 0.0)
+	add_child(door)
+	await _frame(2)
+	_check("非锚点族的实体（门）挡在射线上", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("门不当锚点：不吸附、自动收回",
+		anchor.current_state() == TimeAnchor.State.IDLE and not anchor.has_link())
+	door.queue_free()
+	await _frame(2)
+
+	_check("朝脚下发射", anchor.fire_toward(Vector2.DOWN))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("地面不是锚点族：不吸附、自动收回",
+		anchor.current_state() == TimeAnchor.State.IDLE and not anchor.has_link())
+
+	# —— ⑧ 回程不理碰撞：吸附后在人跟目标之间立一堵墙，E 回收照样穿过来。 ——
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_anchor_reset_target(block)
+	_check("再出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("前提：这一发吸附成功", anchor.current_state() == TimeAnchor.State.ATTACHED)
+	var return_wall := _solid_box(Vector2(200.0, -18.0), Vector2(8.0, 40.0))
+	await _frame(1)
+	Input.action_press(&"interact")
+	await _frame(3)
+	Input.action_release(&"interact")
+	_check("回收转回程（墙拦不住链路断开）", anchor.current_state() != TimeAnchor.State.ATTACHED
+		and not anchor.has_link())
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("回程穿过挡在中间的墙回到手上", anchor.current_state() == TimeAnchor.State.IDLE
+		and anchor.global_position.distance_to(
+			walker.global_position + Vector2(0.0, Player.CHEST_Y)) < 1.0)
+	return_wall.queue_free()
+	await _frame(2)
+
+	# —— ⑨ 死亡当帧断链：被锚着的构件不能拖着一根指向尸体的 Callable 进重载。 ——
+	_anchor_reset_target(block)
+	_check("再出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	Input.action_press(&"move_right")
+	guard = 0
+	while receiver.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：吸附中按着方向键，目标在供时", receiver.get_physics_delta() > 0.0)
+	walker.die(0.2)
+	await _frame(2)
+	_check("死亡当帧清链接：锚回手上、目标回世界钟（世界被死亡钉住）",
+		anchor.current_state() == TimeAnchor.State.IDLE and not anchor.has_link()
+		and receiver.get_physics_delta() == 0.0 and TimeManager.is_frozen_overridden())
+	var phase_death: float = block.elapsed_path_time
+	await _frame(6)
+	_check("死后目标不再吃锚点的 delta（相位钉住）", block.elapsed_path_time == phase_death)
+	Input.action_release(&"move_right")
+	await _frame(2)
+	walker.respawn()
+	TimeManager.reset_state()
+	await _frame(2)
+	_check("复活后锚在手上、人也不在死亡态", anchor.current_state() == TimeAnchor.State.IDLE
+		and not walker.is_dead and not anchor.has_link())
+
+	# —— ⑩ 目标被释放：从最后一格插槽转回程，不留在原地当一根野锚。 ——
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_anchor_reset_target(block)
+	_check("再出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("前提：这一发吸附成功", anchor.current_state() == TimeAnchor.State.ATTACHED)
+	var socket: Vector2 = anchor.global_position
+	block.queue_free()
+	guard = 0
+	while anchor.current_state() == TimeAnchor.State.ATTACHED and guard < 10:
+		guard += 1
+		await _frame(1)
+	_check("目标没了：锚从最后一格转回程（不报错、不留在半空）",
+		anchor.current_state() == TimeAnchor.State.RETURNING and not anchor.has_link()
+		and socket.distance_to(anchor.global_position) < 80.0)
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("目标没了也照样回到手上", anchor.current_state() == TimeAnchor.State.IDLE
+		and not anchor.has_link())
+
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(2)
+	TimeManager.reset_state()
+
+
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
 func _fall_zone_instance(parent: Node, at: Vector2, width: float, depth: float) -> FallZone:
 	var zone := load("res://scenes/objects/fall_zone/fall_zone.tscn") \
@@ -2060,6 +2371,13 @@ func _solid_box(at: Vector2, size: Vector2) -> StaticBody2D:
 	body.position = at
 	add_child(body)
 	return body
+
+
+## 第 22 组重挂前的标准摆位：方块回行程起点、相位清零。**只在世界冻着、且锚没吸着它时调用** ——
+## 世界流着的话下一拍 `_physics_process` 就会把它推离这条射线，重挂那几条断言测的就不是摆位了。
+func _anchor_reset_target(block: MovingBlock) -> void:
+	block.global_position = Vector2(300.0, -32.0)
+	block.elapsed_path_time = 0.0
 
 
 ## 三个存档点 + 一个玩家，摆在第 5 节那块地面（x 600~1800）上：不放祭坛、不放终点区，

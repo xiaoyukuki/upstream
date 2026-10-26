@@ -239,7 +239,7 @@ scenes/ui/time_freeze_filter.gd    →  class_name TimeFreezeFilter
 3.8 禁区写「不出现可交互的移动平台（属后续章节内容）」，而 M4 谜题 4 恰恰是「时停时跳过移动平台，平台冻结在空中形成路径」——M4 属于第一章。两条直接对立。
 需确认：谜题 4 是否延后到第二章，或 3.8 的禁区仅约束 M1~M3。
 
-**✅ 已决策（2026-09-16）**：这两类谜题**整体延后到第二章**，待时间锚点系统解锁后再做。第一章 M4 只做不依赖「专属时间源」的纯时停谜题（垂直移动不触发时停、时停期间观察环境线索、时停期间碰撞体仍有效、组合运用）。`TimeReceiver.set_time_source()` 保持空接口、**全章零调用方**，与 1.2「本章隔离」一致。
+**✅ 已决策（2026-09-16）**：这两类谜题**整体延后到第二章**，待时间锚点系统解锁后再做。第一章 M4 只做不依赖「专属时间源」的纯时停谜题（垂直移动不触发时停、时停期间观察环境线索、时停期间碰撞体仍有效、组合运用）。`TimeReceiver.set_time_source()` 保持空接口、**全章零调用方**，与 1.2「本章隔离」一致。**D68 订正（2026-10-26）**：锚点系统已落地，`set_time_source()` 不再零调用方 —— 设计与实装见文末 D68；本段保留当日收手时的范围记录。
 
 ---
 
@@ -318,7 +318,7 @@ TimeManager (autoload)      _physics_process, priority = -100
                           ▼
               TimeReceiver (每个受时停对象挂一个子节点)
                   get_physics_delta() / get_process_delta()
-                  set_time_source(Callable)   ← 第一章留空接口，无调用方 (D11)
+                  set_time_source(Callable)   ← 第一章留空接口；D68 起由锚点接手 (D11)
                           │
         ┌─────────────────┼──────────────────┬─────────────────┐
         ▼                 ▼                  ▼                 ▼
@@ -337,7 +337,7 @@ TimeManager (autoload)      _physics_process, priority = -100
 | 文件 | 类型 | 职责 | 对外接口 | 明确**不做** |
 |---|---|---|---|---|
 | `time_manager.gd` | Autoload（无 `class_name`） | 时停状态机 + 缓冲 + 门控 + 双通道 delta | `state_changed`、`current_state`、`is_releasing()`、`get_physics_delta()`、`get_process_delta()`、`get_time_scale()`、`notify_movement_intent(bool)`、`set_ability_enabled(bool)`、`reset_state()` | 不读输入（交给 Handler）；不碰 `Engine.time_scale`；不管视觉 |
-| `time_receiver.gd` | `class_name TimeReceiver extends Node` | 单个对象的时间源代理 | `get_physics_delta()`、`get_process_delta()`、`set_time_source(Callable)`、`time_source_changed` | 不含任何游戏逻辑；`_ready()` 加入 `time_receiver` 分组 |
+| `time_receiver.gd` | `class_name TimeReceiver extends Node` | 单个对象的时间源代理 | `get_physics_delta()`、`get_process_delta()`、`set_time_source(Callable, Callable)`、`clear_time_source()`、`time_source_changed`（D68 起有调用方） | 不含任何游戏逻辑；`_ready()` 加入 `time_receiver` 分组 |
 | `movement_input_handler.gd` | `class_name ... extends Node` | 读原始水平轴、死区、边沿检测 | `movement_started`、`movement_stopped`、`raw_axis`、`@export freeze_deadzone` | 不做加速度平滑（D3）；不监听垂直输入；不改玩家速度 |
 | `player.gd` | `class_name Player extends CharacterBody2D` | 平台跳跃手感 | `respawn()`、`landed`、`jumped`、`movement_locked`（D41）、`@export` 手感参数组 | 不查 `TimeManager`（永久豁免）；不管能力解锁；`movement_locked` 只掐水平输入与起跳，不掐冻结意图 |
 | `player_camera.gd` | `class_name PlayerCamera extends Camera2D` | 跟随 + 平滑 + 前瞻 + limits | `@export` 平滑/前瞻/limits | 不查 `TimeManager` |
@@ -502,7 +502,7 @@ KeyDoor (StaticBody2D, layer 4 / mask 0)       key_door.gd
 
 ## 8. 明确不在本次范围
 
-- 锚点同步系统（1.2，第二章）——仅保留 `TimeReceiver.set_time_source()` 空接口，全章无任何调用方
+- 锚点同步系统（1.2，第二章）——仅保留 `TimeReceiver.set_time_source()` 空接口，全章无任何调用方（**D68 订正**：已落地，见文末；本行保留当日的范围记录）
 - 敌人、追逐战、任何动态压力源（3.8）
 - 教程弹窗、按键提示图等文字 UI（3.8）
 - 持久存档（写盘的存档系统）、关卡选择、主菜单 —— D32 只引入**关卡内重生点**（内存内，`run_state` 挂在 Main），`user://` 仍然零引用
@@ -2155,6 +2155,84 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 
 **为什么这一档不需要教新规则**：D47/D48 那台残影踏板已经说过同一句话 ——「我一动，它才从虚变实；我停下，它反而不变」。玩家第一次摸到锚点物时读的是他已经会的那套。
 
-**在册预留（这次核过，接口是干净的）**：`components/time_receiver.gd:38` 的 `set_time_source(physics, process)` / `clear_time_source()` / `time_source_changed` 三条**全在、零调用方**；两条 delta 读点在有 Callable 时走它、否则直连 `TimeManager`。所以接上它只要**一个 Callable**：按着方向键时返回真实 delta，否则返回 0（读点现成 —— `_horizontal_axis()` 是水平轴唯一读点，`MovementInputHandler.is_moving` 已经在对外给）。另有一条 D59 的订正在替这条路保命：**构件一律不自读 `TimeManager.elapsed_world_time`，而是本地 `_clock` 累加 `get_physics_delta()`** —— 直读全局量的东西，锚点劫持不到，等于白丢这条免费通道。D11 那笔"推箱子 / 移动平台延后到第二章"的账，到这一步才算有了正主。
+**在册预留（这次核过，接口是干净的）**：`components/time_receiver.gd:38` 的 `set_time_source(physics, process)` / `clear_time_source()` / `time_source_changed` 三条**全在**（当日零调用方；D68 起由 `TimeAnchor` 接上）；两条 delta 读点在有 Callable 时走它、否则直连 `TimeManager`。所以接上它只要**一个 Callable**：按着方向键时返回真实 delta，否则返回 0（读点现成 —— `_horizontal_axis()` 是水平轴唯一读点，`MovementInputHandler.is_moving` 已经在对外给）。另有一条 D59 的订正在替这条路保命：**构件一律不自读 `TimeManager.elapsed_world_time`，而是本地 `_clock` 累加 `get_physics_delta()`** —— 直读全局量的东西，锚点劫持不到，等于白丢这条免费通道。D11 那笔"推箱子 / 移动平台延后到第二章"的账，到这一步才算有了正主。
 
-**本轮明确不落地**：`set_time_source()` 仍然零调用方，`assets/chapter_02_reserved/` 仍然只有 `.gdignore`。**下一次开工先交"设计结构"再写代码**，要回答的是这些（今天一条都没定）：谁发射（新输入键？还是像祭坛那样"踩上即获得"的一个新能力？）、一次能挂几个锚、锚点能不能被玩家带着走、附着物在锚点消失/死亡重载时怎么复位（`run_state` 要不要记它）、`clear_time_source()` 由谁在什么时候调、以及四条守门各钉哪一格。**"发射"这个词的三种读法（玩家放置锚点 / 抛射体自带锚 / 把残影发射器改成按时间戳实体化）当时没排除干净，只锁定了"时间源 = 玩家"这一条**，开工第一件事是把这句话变成一个物件与一条输入。
+**本轮明确不落地**：`set_time_source()` 仍然零调用方，`assets/chapter_02_reserved/` 仍然只有 `.gdignore`。**D68 已落地（2026-10-26）**：下面这份"下一次开工先交设计结构"的清单已经逐条回答，设计与实装见文末 D68；本段保留当日收手时的原样。**下一次开工先交"设计结构"再写代码**，要回答的是这些（当天一条都没定）：谁发射（新输入键？还是像祭坛那样"踩上即获得"的一个新能力？）、一次能挂几个锚、锚点能不能被玩家带着走、附着物在锚点消失/死亡重载时怎么复位（`run_state` 要不要记它）、`clear_time_source()` 由谁在什么时候调、以及四条守门各钉哪一格。**"发射"这个词的三种读法（玩家放置锚点 / 抛射体自带锚 / 把残影发射器改成按时间戳实体化）当时没排除干净，只锁定了"时间源 = 玩家"这一条**，开工第一件事是把这句话变成一个物件与一条输入。（编号记账：这一条本轮不落地，所以 D66 之后第一个被用掉的空号是下面这条 D67；**锚点系统的设计结构改用 D68**。）
+
+### D67 · 第二套落盘配色：`d 软糖贴纸` 出成一份能指的 TileSet，给换美术风格的新关用（几何与 g 逐格同源，现有关一字不动）
+
+**起因（2026-10-26）**：他要做新的一关，并且「希望换一种地图美术风格，即之前提交在 assets 里的 d 风格」。`d` 不是新画的东西 —— 它是 `tools/gen_tiles.py::STYLES["d"]`（`D CANDY STICKER`：quilt 软包墙 + dot 波点地 + plum 描边，`soft=True` 那套贴纸语言），整套房间预览一直在 `assets/tiles/preview_room_d.png`；`SHIPPED` 上面那行注释本来就写着「d = 软糖贴纸，留给后面的关卡（同一套 soft 语言，换配色即可）」。**这次就是那句"留给后面"到期。**
+
+**三条裁定（我摆菜单，他一句"按推荐档执行"整体放行）**：
+
+1. **新增一套，不换掉 g**。产物是 `lab_tileset_d.tres`，`SHIPPED` 仍是 `g`：现有关、模板、`level1.tscn` 的 `ext_resource` 全按 `lab_tileset.tres` 写死，改那一行等于把所有已摆好的图换配色，不是他要的事。新关只把 `Terrain` 三层的 `tile_set` 指过去。
+2. **装饰图集一起出**（14 块，含 `wall_fill` / `shade` / 两块无字告示牌）。只出地形 = 地基那一层还是夜光配色，等于没换风格。
+3. **构件这一轮不动，只把代价算清楚交给他**（见下面那笔账）。构件换色是另一条决定：要重烤 `gen_props.py` 那批 PNG、动 `props.json` 的别名、逐件验读法，不该塞在一次换皮里。
+
+**这条决定几乎不花钱的原因**：`build_terrain_atlas(p)` / `build_decor_atlas(p)` 从 D24 起就是**吃调色板的函数**，`STYLES[key]` 里那十几个键名就是全部参数。所以 d 这一套不需要画任何东西，只需要把同一批 painters 用 d 的 `p` 再跑一遍并落第二份文件。**于是两套的瓦片索引逐格同源**：同一张 16 格掩码表、同一批装饰矩形、同一个 terrain 求解器结果集 —— 旧关的摆图层可以整层复制进用 d 的关，坐标一格不动。
+
+**代价算清楚了（这一条才是 D67 真正的内容）**。第一轮报数用的是 `props_strip` 里那四个 `@export` 占位色，第二轮换成 `props.json` 里的**在册真色**，两处不同数，**以第二轮为准**（`_cr()` = WCAG 对比度，4.5 是平台跳跃里"读得出来"的下限）：
+
+| 在册色 | 对 g 墙 | 对 d 墙 | 对 d 地 |
+|---|---|---|---|
+| 主角身体 (10,12,12) | **2.63**（靠 g2 亮边救） | **15.70** | 11.79 |
+| 主角那圈 g2 亮边 (206,222,250) | 5.48 | **1.09** | 1.22 |
+| 祭坛核心 / 门光幕 青 (110,230,240) | 5.05 | **1.18** | 1.13 |
+| 门 LED 亮态 (182,242,248) | 6.04 | **1.01** | 1.35 |
+| 门 LED 锁定琥珀 (250,190,74) | 4.44 | **1.34** | 1.01 |
+| 按钮面板 ab 琥珀 (240,180,41) | 3.99 | 1.49 | 1.12 |
+| 门体 ab deep (94,108,125) | 1.39 | **4.29** ↑ | 3.22 |
+
+读法：**d 把主角那一半问题整个解决了**（亮底 + 近黑身体 = 15.70，不再需要 g2 那圈补边，而那圈补边在 d 上反而成了一条 1.09 的没用的淡边）；**但它把"青 = 灯 / 运行"这套夜光语言整个压平** —— 祭坛核心、光幕、LED 亮态全落到 1.0~1.2，也就是"能亮的那一系都不亮"。唯一变好的一头是深色门体（1.39 → 4.29）。**这笔账现在不还**：用 d 摆关之前要先裁构件换色，否则玩家在那一关里看不出"哪盏灯亮着"。数字只陈述，不替他否决审美（D46），但他做那一关的构图时这七个数会真的摆在画面里。
+
+**三条非显然处（都是这次当场踩到或当场避开的）**：
+
+1. **图集文件名一律从清单读，不许在生成器里写死。** `build_tileset.gd` 以前写死 `tilesheet_terrain.png`；两套并存之后那条硬编码的后果是**d 的 TileSet 挂着 g 的图** —— 不报错、不崩、peering bit 全对，只是新关刷出来是旧配色，而没人会去查一份 json。所以路径改成从 `manifest["terrain"]["file"]` / `["decor"]["file"]` 拼，并且守门为此多钉三条（见下）。
+2. **全新资源必须自己发 uid**。`ResourceUID.generate()` 在 4.6 **不存在**（探针：`has_method("generate") == false`，`create_id` 为真），能用的只有 `create_id()` + `id_to_text()`。不发这一行就等于把"这个资源没有身份"留给编辑器去补，而它补之前任何场景按 `uid=` 引用都落空。g 那一套走原路（读到旧 uid 原样补回），所以它的 `.tres` 逐字节零变化。
+3. **`ext_resource` 的账也要补，只是全新文件没有旧账可读**（`keep_uid.read_ext_uids()` 回空表，而那句"全新资源本来就没有旧账"是有意的）。但两张 PNG 已经先一步被导入、uid 就写在各自的 `.import` 里，所以按那份账把 `uid="..."` 补进资源行 —— 产物就跟编辑器自己写的一模一样，否则编辑器下次存这份资源会连 `id=` 一起重排，"只换了配色"在 diff 里看成整份重写（D56/D57 为同一个坑补过两次账）。这条兜底**只在旧账为空时**走，g 那一套一个字节都没动。
+
+**契约变更：零。** 关卡、构件、脚本、玩家、存档一字未动；`SHIPPED` 仍是 `g`；模板那三层仍指 `lab_tileset.tres`。落地的只有：`gen_tiles.py` 多一条 `EXTRA_SHIPPED = ("d",)` 与按套落盘的循环（`write_manifest` / `atlas_sheet` 参数化）、`build_tileset.gd` 从"一份 manifest"改成"一对清单"、`tileset_selftest.gd` 把同一套断言对每套各跑一遍。新资源：`tilesheet_terrain_d.png` / `tilesheet_decor_d.png` / `tiles_d.json` / `preview_tiles_d.png` / `lab_tileset_d.tres`（+ 三张 `.import`）。
+
+**摆图侧的用法（已写进手册）**：复制模板 → 选中 `Terrain/WallFill`、`Terrain/Decor`、`Terrain/Tiles` 三层 → `tile_set` 都指到 `lab_tileset_d.tres`。三层必须指同一套，混指会出现地基是夜光、地形是软糖。已摆好的层可以从用 g 的关里整层复制过来（索引同源），刷出来自动是 d 的配色。
+
+**守门**：`tileset_selftest` 从"读一份清单 + 一份资源"改成**对 `SETS` 里每一对各跑一遍**，`checks` 从 316 涨到 **634**，`failures=0`；FAIL 行前缀 `[g]` / `[d]`，混跑时知道回去查哪份产物。这次新增的钉子全部只为"两套并存"这一件事服务：**① 清单声明的 `style` 必须等于这一对应该的风格**（清单自己声明错 = 后面所有断言都在验一套不存在的东西）；**② 源上实际挂的纹理必须以清单里那个文件名结尾**（把 d 的清单配给 g 的资源当场响）；**③ 两套的两张源图不许是同一张**（钉的是这次唯一那种静默失败）。四条无头守门：`VERIFY DONE doors=3 pistons=5 fallzones=1 failures=1`（**那一条 FAIL 是用户未提交的 `level1.tscn` 里 `Objects` 容器带位移 (-2,1)，按约定不由我修**）/ `[kit-selftest] done failures=0` / `SPRITE SELFTEST DONE failures=0` / `TILESET SELFTEST DONE failures=0 checks=634`。
+**新钉子先证明它会响**：临时往 `SETS` 里加第三条 `PROBE`（`manifest` 用 `tiles_d.json`、`tileset` 用 `lab_tileset.tres`、`style` 声明成 `nope`）—— 一条记录同时构成三种误配，跑出来 **5 条 FAIL、退出码 1**：`[PROBE] 清单声明 style == nope，实测 d` / `[PROBE] 地形源挂的是清单里那张（tilesheet_terrain_d.png）` / `[PROBE] 装饰源挂的是清单里那张` / `[g/PROBE] source 0 与 source 1 两张图不能是同一张（都是 res://assets/tiles/tilesheet_terrain.png / tilesheet_decor.png）`。删掉 PROBE 复跑照绿。**没有这次实验，那三条新钉只是"我以为会响"。**
+
+**顺带一笔（同源账的另一种烂法）**：`preview_room_*.png` 那 9 张在 HEAD 上是**陈的** —— 重出后逐张比对，差异只落在四个"文字行带"上（标题两行与 `dims()` 那几处标注），图元本身一格没变；也就是说有人改过标注文案而没人重出图。本次连它们一起重出，与当前工具对齐。幂等性核过：`lab_tileset.tres` md5 与提交前一致；`lab_tileset_d.tres` 连跑三次 md5 不变；四张 SHIPPED 产物（两张图集 + `tiles.json` + `preview_tiles.png`）md5 全部与提交前一致。
+
+**How to apply**：一，**"给同一套几何出第二套配色"这件事，便宜的前提是当年的 painters 就把调色板当参数**。D24 那版把 `p` 一路传到底，今天加一套风格就是数组里多一行；那时若写成读全局常量，今天就得先做一次解耦。以后凡是"资源会长出第二套"的地方，先问一句"参数化了吗"，没有就先参数化，别在产物层面复制粘贴。第二，**两套并存的唯一静默失败是"新的挂着旧的"**，而它不报错、不崩、连几何断言都照绿 —— 所以守门必须钉"两套不是同一张图"这种**关系**，只钉每套自己的性质不够。第三，**无头生成的新资源要自己发 uid，且 `ext_resource` 的账从 `.import` 里补**：4.6 没有 `ResourceUID.generate()`，只有 `create_id()` + `id_to_text()`；把身份留给编辑器去补，等于让第一批引用者按路径找。第四，**换地图风格不等于换构件**：这一轮只换地形，代价算成表交出去，让它成为下一条看得见的决定，而不是悄悄把七件构件的皮顺手改了。
+
+---
+
+### D68 · 时间锚点：玩家自己瞄准发射的一根锚，吸住目标后它的时间源改成「玩家的手」——强回收（一次一根、E 当帧断链）
+
+**起因（2026-10-26）**：D66 已把锚点物的时间源钉成「玩家的动作」，但把设计结构留到下一次开工；他随后把交互形态说死了：「我不希望用“目标选择”的方式选择物体，我更希望玩家可以自己瞄准发射锚点，自由决定自己要控制什么物体，类似于发射的锚点覆盖机关或者箱子」。接着补了一句「锚点回收还没有设计」——回收因此按**强回收**定（E 随时收回，目标当帧回世界钟），不是「等锚自己飞回来」或「目标永占一个槽」。他一句「开写」整体放行。
+
+**五条裁定（都是这次新定的）**：
+
+1. **发射不是选目标**。Q（另绑鼠标左键）按住进入瞄准，方向 = 胸口指向鼠标（鼠标压在胸口上时退回朝向），松开即发射；射程 320 px 从胸口算。瞄准期间画虚线 + 准星：可锚物亮色（`COL_LIT`）、不可锚物暗色（`COL_UNLIT`）、没命中用拖尾色。`fire_toward(direction)` 是唯一生产入口，守门走它给确定方向，不摆鼠标。
+2. **一次只有一根锚，四态**：IDLE → OUTBOUND → ATTACHED → RETURNING → IDLE。吸附中按 Q 什么也不发生（不射第二根、不画瞄准线）；要换目标先 E。
+3. **时间源 = 玩家的手**（D66① 的落法）：目标的时间源在吸附那一刻被换成 `TimeAnchor._pump_physics_delta` / `_pump_process_delta`。四条全真才供时：主人活着、没被移动锁掐住、能力已开、手上有方向（`MovementInputHandler.is_moving`），外加目标与接收器仍在树上。给的是**真实 delta**，不是世界钟的门控 delta —— 世界冻着、人按着方向走，目标照走；世界流着、人站着，目标停。刻意不读 `elapsed_world_time`、不吃 0.08 s 松手缓冲、不认死亡/授予那一拍的强制冻结：那三道闸管的是世界，锚点物只听手。松手当帧归零。
+4. **强回收**：E（复用 `interact`，没新增按键）只在 OUTBOUND / ATTACHED 有反应。吸附中按 E **当帧** `clear_time_source()`，目标立刻回世界钟；回程只演视觉，不再拖住任何东西。回程不吃碰撞，直线追胸口，时长按 `distance / 1400` 夹 `[0.08, 0.30]` s；半路按 E 同样收；未命中 / 打到非锚点物 / 射程尽头给 0.12 s 短收团。
+5. **不碰目标相位、不进存档**。吸附与回收都不写目标的 `elapsed_path_time` —— 相位是目标自己的，锚只借它的时间源。锚不写 `run_state`：死亡当帧 `cancel_for_death()` 收回手上；关卡重载由 `_exit_tree()` 断链，新场景里是一根新锚。它是这一条命的物件，不是进度。目标被 `queue_free()` 时，锚从最后一格插槽回程，不在半空留一根野锚。
+
+**锚点族（可扩展的判据，不是白名单）**：根节点进 `anchorable` 组、自己挂着 `TimeReceiver` 子节点、碰撞层含 terrain(1) 或 time_solid(4)、不是危险物（`HazardBase` 继承链 / `touched_player` 信号）。射线 `HIT_MASK = 1 | 4`，传感器与玩家不在射线上（玩家 RID 另从查询排除）。移动方块第一个接入；门、地面、墙都不在族里，打上去只演「撞到但吸不住」的短回程。
+
+**回执（D59 词汇，纯装饰）**：吸附后锚上方一条 12 格走带（`RECEIPT_TICKS` 必须等于 `WorldClock.TICKS`），周期 1.2 s，3 px 格 + 1 px 间隙，悬浮 30 px；调色板全取 `WorldClock.COL_*` 的在册色。亮格是 `_wound` 的纯函数（`int(fmod(_wound / 1.2, 1.0) * 12) % 12`），`_wound` 只在「供时」那一拍累加 —— **走带停住 = 这个物件这一拍没在动**。时间源从不回头读 `_wound`，回执也不发信号。
+
+**实现里四个非显然处**：
+
+1. **锚在代码里造，不进 `player.tscn`**。`Player._ready()` 里 `TimeAnchor.new()`、命名、赋 `source` 再 `add_child`。理由不是图省事：锚要 `top_level = true`、`z_as_relative = false`、`z_index = 5` —— 飞行/吸附都在世界坐标里算，跟着 Player 的变换走会在人转身时一起翻；它也不该挂在 `Visual` 底下，死亡那一拍的收缩不能把锚一起缩掉。这几条写在脚本 `_ready()` 里，场景文件零改动。
+2. **`set_time_source` / `clear_time_source` 各只有一个书写点**，守门按出现次数钉死。多一处书写点，就会出现「这条路径吸上了、那条路径没撒手」的半截链接，而实机只表现为「某个构件偶尔还能动」。
+3. **`_exit_tree()` 必须断链**。锚被移出树（关卡重载、玩家释放）时，目标手里的 Callable 指向一具尸体；不断链的话它下一帧会静默退回世界钟，而没人在那之后解释「为什么我拿不到它了」。死亡走 `cancel_for_death()`、复活走 `reset_state()`，两条都在 `Player` 侧接上。
+4. **目标消失那条分支不走 `_drop_link()`**：`TimeReceiver` 自己也随目标没了，`is_instance_valid` 已经为假；直接把 `_target` / `_receiver` 清空、从最后插槽 `_begin_return()`，比对着一个已释放对象调 `clear_time_source()` 稳。
+
+**守门**：
+
+- `verify_kit` 新增静态一遍，钉五类：①两个调用各恰好一次；②禁读 `elapsed_world_time` / `TimeManager.get_*_delta` / `Engine.time_scale` / `run_state` / `func _process(`；③四个闸字符串必须在；④`_pump_enabled()` 函数体不许出现 `_wound`、回执必须取全部六只在册色、`RECEIPT_TICKS == WorldClock.TICKS`；⑤`Player` 只造一根锚且名字/死亡/复活三处接上、`anchor` 动作真有 Q + 左键、扫 `scenes/objects` 下每个 `anchorable`（实体、层 1|4、有 TimeReceiver、非危险物），移动方块必须在族里且族不能空转。收据里多了 `anchorables=1`。
+- `kit_selftest` 第 22 组 **46 条**，全走真实 `player.tscn` + `moving_block.tscn` + 真实 Input 事件（`Input.action_press` 排的事件要过约 3 个物理帧才成为 `just_pressed`，所以按键类断言都等 3 拍）。覆盖的不只是「能吸上」：世界冻着按方向 → 目标拿到 delta；世界流着站着 → 目标不动（这条是否定式，专钉「跟的是手不是世界钟」）；松手当帧归零；移动锁 → 立刻停、解锁 → 接着供；瞄准/发射输入链；第二发无效；吸附中 Q 无效；回执相位四档（0 / 半圈 / 整圈 / 1.25 圈）；拧回执相位不停时间源；E 当帧断链且目标相位不回 0；半路 E；撞墙 / 门 / 地面 / 射程尽头；回程穿墙；死亡断链 + 复活回手；目标被释放从最后插槽回程。
+- **新钉子先证明会响**（两条破坏性对照）：①删掉 `_pump_enabled()` 里的 `source.input_handler.is_moving` → `VERIFY FAIL: 时间源的闸缺了 source.input_handler.is_moving…（D68）`；②把 `moving_block.tscn` 的 `anchorable` 组去掉 → `VERIFY FAIL: 移动方块没进 anchorable 组…` + `VERIFY FAIL: 一个 anchorable 都没扫到…`，`anchorables=0`。两条都复原后复跑照绿。
+- **四条无头守门**：`VERIFY DONE doors=3 pistons=5 fallzones=1 anchorables=1 failures=1`（那一条 FAIL 仍是用户未提交的 `level1.tscn` 里 `Objects` 容器带位移 (-2,1)，按约定不由我修）/ `[kit-selftest] done failures=0` / `SPRITE SELFTEST DONE failures=0` / `TILESET SELFTEST DONE failures=0 checks=634`。
+- **一条既有噪声**：`kit_selftest` 退出时打了 `WARNING: ObjectDB instances leaked at exit` + `ERROR: 1 resources still in use at exit`。把第 22 组的调用临时注释掉复跑，同两条照样出现，`tileset_selftest` 也有 —— 是基线，不是 D68 引入的；没有顺手处理。
+
+**How to apply**：一，**「时间源」不是「世界状态」的同义词**。锚点物的四条闸故意绕开 `TimeManager` 的状态机、松手缓冲和强制冻结 —— 因为玩家看见的因果必须是「我按着，它在动；我松手，它当帧停」，而世界钟那几道闸是为世界本身服务的。以后再接第二种「跟动作走」的物件（第二章锚点系统），先问它跟的是谁的手，再决定读哪个 delta，别顺手拿 `get_physics_delta()`。二，**强回收的价值在「当帧断链」**：回程只是视觉，目标从按 E 那一拍起就归世界钟。若让回程再拖住目标，玩家会看到一个「已经松手却还在走」的窗口，而这正是这套机制最不能有的手感。三，**可锚族要用判据扫描、不要维护白名单**：组 + TimeReceiver + 层 + 非危险物，新构件挂上组就自动进守门；空转（扫到 0 个）必须报错，否则「族检查全绿」可能只是一次空跑。四，**纯装饰的回执只许读时间源，不许喂时间源**；把 `_wound` 塞进 `_pump_enabled()` 会让回执变成第二个时间权威，而画面不会报错。五，**进度的归进度、这一条命的归这一条命**：锚不写 `run_state`，目标相位不因锚复位 —— 这两条如果反过来，死一次就会把谜题状态一起带走。

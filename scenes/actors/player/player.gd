@@ -153,6 +153,10 @@ var _grant_glow_total: float = 1.0
 ## 里摆（形状全是脚本常量 + 每帧 `_draw`），而"画在身体背后"这件事排到 Visual 之前就够了。
 ## 也不挂 Visual 底下：那份变换正被死亡那一拍缩着（D42），光柱不该跟着一起缩。
 var _grant_beams: GrantBeams
+## 时间锚点（D68）。与光柱同一条理由在代码里造、不进 player.tscn：它没有一颗旋钮要在
+## 编辑器里摆（形状全是脚本常量 + 每帧 `_draw`），而且必须 `top_level` 才好在飞行时用世界坐标。
+## 挂在 Player 下是为了跟着人走（IDLE 时贴胸口）与随关重载一起释放。
+var _time_anchor: TimeAnchor
 ## 死亡那一拍的液滴（D42）。排在 Visual 之后 = 画在身体之上；挂在 Player 而不是 Visual
 ## 之下，是因为 Visual 正被演出缩着，液滴不该跟着一起缩。
 @onready var _death_burst: DeathBurst = $DeathBurst
@@ -194,6 +198,15 @@ func _ready() -> void:
 	add_child(_grant_beams)
 	# 排在 Visual 之前 = 画在身体背后：光柱的顶点钉在胸口，画在人前面会把整张脸糊掉。
 	move_child(_grant_beams, _visual.get_index())
+	_time_anchor = TimeAnchor.new()
+	_time_anchor.name = "TimeAnchor"
+	_time_anchor.source = self
+	add_child(_time_anchor)
+
+
+## 关卡、守门与调试面板要读锚的状态时走这里，不要按名字摸子节点。
+func time_anchor() -> TimeAnchor:
+	return _time_anchor
 
 
 func _physics_process(delta: float) -> void:
@@ -348,6 +361,8 @@ func respawn() -> void:
 	_grant_remaining = 0.0
 	_grant_lifted = 0.0
 	_grant_pinned = false
+	# 锚是这一条命里的物件：复活即回手上，不让上一具身体的链接跨过来（D68，不写 run_state）。
+	_time_anchor.reset_state()
 	is_crouching = false
 	is_head_blocked = false
 	movement_locked = false
@@ -367,6 +382,8 @@ func die(duration: float) -> void:
 	_death_time = maxf(duration, 0.001)
 	_death_elapsed = 0.0
 	velocity = Vector2.ZERO
+	# 死亡当帧断链（D68）：被锚着的构件不能拖着一根指向尸体的 Callable 进重载。
+	_time_anchor.cancel_for_death()
 	TimeManager.set_frozen_override(true)
 	_death_burst.launch(_death_time)
 	_apply_death_transform(0.0)

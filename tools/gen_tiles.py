@@ -10,7 +10,12 @@
   preview_room_d/e/f/g.png 同上，但带 soft=True：暗描边朝外 + 角上斜切成圆角 + 装饰补贴纸边。
                           落盘那套 ab 是「亮边朝外」的金属语言，和主角 (4,4,4) 粗轮廓不同源；
                           这四套是给换风格准备的候选，选定前不动 tilesheet_*.png。
+                          （d 已被 D67 选作第二套，落在带 _d 后缀的文件里，见下。）
   preview_tiles.png       图集放大图 + 现有构件占位色落在新地砖上的兼容性条
+  —— D67 起 EXTRA_SHIPPED 里每一套也各落一份，文件名带 _<key> 后缀：
+     tilesheet_terrain_d.png / tilesheet_decor_d.png / tiles_d.json / preview_tiles_d.png。
+     几何与 SHIPPED 逐格同源（同一批 painters，只换调色板），所以瓦片索引一一对应、
+     旧关的摆图层能整层复制进用 d 的关；SHIPPED 那一套的文件名与内容一字未动。
 
 和早期选型预览的三点不同，全是为了「预览 == 引擎」：
 1. 地形按 16px 单格画，不再按整块 mass 画。32px 板缝在 16px 瓦片上无法连续，主体
@@ -153,6 +158,15 @@ ORDER = ("ab", "a", "b", "c", "d", "e", "f", "g", "g2")
 #   d  = 软糖贴纸，留给后面的关卡（同一套 soft 语言，换配色即可）。
 #   ab = D24 那套「亮边朝外」的金属语言，已退役，留在表里只为出对比预览。
 SHIPPED = "g"
+
+# 除 SHIPPED 之外还要落盘的风格（D67）：几何、掩码、装饰矩形与 SHIPPED 逐格同源，
+# 只换调色板，所以产物一律带 `_d` 后缀而不是覆盖 `tilesheet_*.png` —— 现有关照旧指 g。
+# 瓦片索引与 g 一一对应，因此旧关的摆图层可以整层复制进用 d 的关。
+# 代价写在明面上：d 是亮底（墙相对亮度 79.1，g 是 9.1），主角轮廓因此从 2.63 涨到 15.70
+# 且不再需要 g2 那圈亮边，但在册构件的皮是照 g 那套夜光语言烤的，落在这面墙上会糊
+# （祭坛琥珀对 d 墙 1.17、按钮 1.74、青 LED 1.18；只有门反而从 1.73 涨到 3.45）。
+# 这条不是漏改，是 D67 明知故犯的那一半：构件换色归下一条决定，不在这次换皮里。
+EXTRA_SHIPPED = ("d",)
 
 # 装饰图集：所有矩形都必须 16 对齐且宽高是 16 的整数倍 —— TileMapLayer 只能按整格放，
 # 图集格子的取图区域也恒等于 coords*16 + size*16，没有单独设 texture_region 的接口。
@@ -788,7 +802,7 @@ def props_strip(p, terrain):
     return img.convert("RGB").resize((w * ZOOM, h * ZOOM), Image.NEAREST)
 
 
-def atlas_sheet(p):
+def atlas_sheet(p, terrain_file="tilesheet_terrain.png", decor_file="tilesheet_decor.png"):
     terrain = build_terrain_atlas(p)
     decor = build_decor_atlas(p)
     ts, ds = 8, 2                                       # 地形放大 8 倍、装饰 2 倍
@@ -807,7 +821,7 @@ def atlas_sheet(p):
            fill=(24, 28, 34), font=f)
 
     ox, oy = pad, pad + 26
-    d.text((ox, oy - 18), "tilesheet_terrain.png  (x8)", fill=(24, 28, 34), font=fs)
+    d.text((ox, oy - 18), "%s  (x8)" % terrain_file, fill=(24, 28, 34), font=fs)
     canvas.paste(terrain.resize((tw, th), Image.NEAREST), (ox, oy))
     for mask in range(16):                              # 每格标出掩码：U R D L，有邻居的记实心
         cx = ox + (mask % 4) * TILE * ts
@@ -817,7 +831,7 @@ def atlas_sheet(p):
         d.text((cx + 3, cy + 3), "%2d %s" % (mask, tag), fill=(240, 70, 70), font=fs)
 
     dx = ox + tw + gap
-    d.text((dx, oy - 18), "tilesheet_decor.png  (x2, over checkerboard = real alpha)",
+    d.text((dx, oy - 18), "%s  (x2, over checkerboard = real alpha)" % decor_file,
            fill=(24, 28, 34), font=fs)
     check = Image.new("RGB", (dw, dh))
     dc = ImageDraw.Draw(check)
@@ -841,20 +855,20 @@ def atlas_sheet(p):
 
 # ---------------------------------------------------------------- 清单与入口
 
-def write_manifest(out_dir):
+def write_manifest(out_dir, style, terrain_file, decor_file, manifest_name):
     manifest = {
         "tile": TILE,
-        "style": SHIPPED,
-        "surface_language": "sticker" if STYLES[SHIPPED].get("soft") else "bevel",
+        "style": style,
+        "surface_language": "sticker" if STYLES[style].get("soft") else "bevel",
         "terrain": {
-            "file": "tilesheet_terrain.png",
+            "file": terrain_file,
             "size": [64, 64],
             "mask_bits": {"up": UP, "right": RIGHT, "down": DOWN, "left": LEFT},
             "note": "mask bit set = that side has a solid neighbour, so no cap/face is drawn there",
             "tiles": [{"mask": m, "x": (m % 4) * TILE, "y": (m // 4) * TILE} for m in range(16)],
         },
         "decor": {
-            "file": "tilesheet_decor.png",
+            "file": decor_file,
             "size": list(DECOR_SIZE),
             "items": {k: list(v) for k, v in DECOR.items()},
         },
@@ -863,7 +877,7 @@ def write_manifest(out_dir):
             "shade": "Decor layer, pit shaft cells",
         },
     }
-    path = os.path.join(out_dir, "tiles.json")
+    path = os.path.join(out_dir, manifest_name)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
@@ -891,25 +905,39 @@ def contrast_report(root):
             "   <- player silhouette below 4.5" if weak else ""))
 
 
+def sheet_names(key):
+    """每一套落盘风格的四个文件名。SHIPPED 占的是**没有后缀**的那一组旧名字 ——
+    `lab_tileset.tres` 里的 ext_resource、`level1.tscn`、四条守门全都按它写死，
+    改不动也不该改。额外风格（D67 的 d）一律带 `_<key>` 后缀，新关自己指过去。"""
+    if key == SHIPPED:
+        return "tilesheet_terrain.png", "tilesheet_decor.png", "tiles.json", "preview_tiles.png"
+    return ("tilesheet_terrain_%s.png" % key, "tilesheet_decor_%s.png" % key,
+            "tiles_%s.json" % key, "preview_tiles_%s.png" % key)
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out_dir = os.path.join(root, "assets", "tiles")
     os.makedirs(out_dir, exist_ok=True)
 
-    shipped = STYLES[SHIPPED]
-    build_terrain_atlas(shipped).save(os.path.join(out_dir, "tilesheet_terrain.png"))
-    build_decor_atlas(shipped).save(os.path.join(out_dir, "tilesheet_decor.png"))
-    print("saved tilesheet_terrain.png / tilesheet_decor.png  (style=%s)" % SHIPPED)
-    print("saved", write_manifest(out_dir))
+    for key in (SHIPPED,) + tuple(EXTRA_SHIPPED):
+        p = STYLES[key]
+        terrain_file, decor_file, manifest_name, sheet_name = sheet_names(key)
+        build_terrain_atlas(p).save(os.path.join(out_dir, terrain_file))
+        build_decor_atlas(p).save(os.path.join(out_dir, decor_file))
+        print("saved %s / %s  (style=%s)" % (terrain_file, decor_file, key))
+        print("saved", write_manifest(out_dir, key, terrain_file, decor_file, manifest_name))
+        # 说明图连那条"现有构件的占位色落在新地砖上"的对照条一起出 ——
+        # 换风格要糊的是构件，不是地形，这张图就是那一半代价的收据。
+        out = os.path.join(out_dir, sheet_name)
+        atlas_sheet(p, terrain_file, decor_file).save(out)
+        print("saved", out)
 
     for key in ORDER:
         out = os.path.join(out_dir, "preview_room_%s.png" % key)
         render_room(STYLES[key], root).save(out)
         print("saved", out)
 
-    out = os.path.join(out_dir, "preview_tiles.png")
-    atlas_sheet(shipped).save(out)
-    print("saved", out)
     contrast_report(root)
 
 

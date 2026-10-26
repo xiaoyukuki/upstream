@@ -2,6 +2,7 @@ extends SceneTree
 
 const SCRIPTS := [
 	"res://scenes/actors/player/player.gd",
+	"res://scenes/actors/player/time_anchor.gd",
 	"res://scenes/objects/platform/platform.gd",
 	"res://scenes/objects/door/door.gd",
 	"res://scenes/objects/button_plate/button_plate.gd",
@@ -132,6 +133,12 @@ const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
 const FALLZONE_SCRIPT := "res://scenes/objects/fall_zone/fall_zone.gd"
 const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
 const CLOCK_SCRIPT := "res://scenes/objects/clock/clock.gd"
+const TIME_ANCHOR_SCRIPT := "res://scenes/actors/player/time_anchor.gd"
+const MOVING_BLOCK_SCENE := "res://scenes/objects/moving_block/moving_block.tscn"
+## 锚点物不许是危险物（D66②）。HazardBase 是这一章"会杀人"的形状，按继承链认它，
+## 不按具体构件点名 —— 将来新加的危险物也逃不过。
+const HAZARD_BASE_SCRIPT := "res://components/hazard_base.gd"
+const ANCHOR_GROUP: StringName = &"anchorable"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
 
@@ -144,6 +151,8 @@ var _pistons_checked: int = 0
 ## 坠落带同理只报计数（D52）：哪一关需要、要铺多宽都是摆图的决定，守门钉死它只会
 ## 把「这关根本没有坑」也判成 FAIL。
 var _fallzones_checked: int = 0
+## 锚点族（D68）：扫到几块挂了 anchorable 的实体。扫描空转比漏检更糟，所以设了下限。
+var _anchorables_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -222,11 +231,12 @@ func _process(_delta: float) -> bool:
 	_verify_fall_zone()
 	_verify_clock()
 	_verify_altar_save()
+	_verify_time_anchor()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
-	print("VERIFY DONE doors=%d pistons=%d fallzones=%d failures=%d"
-		% [_doors_checked, _pistons_checked, _fallzones_checked, _failures])
+	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d failures=%d"
+		% [_doors_checked, _pistons_checked, _fallzones_checked, _anchorables_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -751,6 +761,143 @@ func _verify_altar_save() -> void:
 	var releases := base.count("call(&\"release\")")
 	if releases != 1:
 		_fail("release 的调用点 = %d（应为 1）：谁亮着这件事实只能有一个书写者（D51/D62）" % releases)
+
+
+## D68 时间锚点。静态这一遍钉的全是"改了不响、要到实机才露馅"那五类：
+## ① 时间源只能有一条式子：`set_time_source` / `clear_time_source` 各恰好一处。
+##    多一处书写点，就会出现"这条路径吸上了、那条路径没撒手"的半截链接；
+## ② 那条式子不许读世界钟/全局缩放/存档 —— D66① 的锚点物跟的是玩家的手，
+##    写成 `elapsed_world_time` 会看起来也在动，但世界一冻它就停，整条机制反了；
+## ③ 四个闸缺一不可（活着 / 没被移动锁掐 / 能力已开 / 手上在动），少一条就是
+##    "某种状态下它会自己走/自己停"，而画面不会报错；
+## ④ 回执是 `_wound` 的纯函数且绝不回头喂时间源：没有 `_process`（照帧率卷），
+##    `_pump_enabled()` 的函数体里不出现 `_wound`；调色板与世界钟同一批在册色；
+## ⑤ 锚点族：移动方块真在组里、每一员都是实体（layer 1|4）、挂 TimeReceiver、
+##    不是危险物；扫不到任何一员就是空转，必须响。玩家只造一根锚，anchor 键真有 Q + 左键。
+## 行为那半边（吸附/供时/松手即停/强回收/回程穿墙/死亡断链）归 kit_selftest 第 22 组。
+func _verify_time_anchor() -> void:
+	var src := FileAccess.get_file_as_string(TIME_ANCHOR_SCRIPT)
+	if src.is_empty():
+		_fail("读不到 %s" % TIME_ANCHOR_SCRIPT)
+		return
+	var sets := src.count("_receiver.set_time_source(")
+	var clears := src.count("_receiver.clear_time_source(")
+	if sets != 1:
+		_fail("时间锚点里 set_time_source 出现 %d 次（应恰好 1：接手只能有一个书写点，D68）" % sets)
+	if clears != 1:
+		_fail("时间锚点里 clear_time_source 出现 %d 次（应恰好 1：断链只能有一个书写点，D68）" % clears)
+	for banned in ["elapsed_world_time", "TimeManager.get_physics_delta",
+			"TimeManager.get_process_delta", "Engine.time_scale", "run_state", "func _process("]:
+		if src.contains(banned):
+			_fail("时间锚点里出现了 %s：D66① 的时间源只认玩家的动作，不认世界钟/全局缩放/存档（D68）"
+				% banned)
+	for gate in ["source.is_dead", "source.movement_locked", "TimeManager.is_ability_enabled",
+			"source.input_handler.is_moving"]:
+		if not src.contains(gate):
+			_fail("时间源的闸缺了 %s：四条缺一条，锚点物就会在某种状态下自己走/自己停（D68）" % gate)
+	var pump_start := src.find("func _pump_enabled")
+	var pump_end := src.find("func ", pump_start + 1) if pump_start >= 0 else -1
+	if pump_start < 0 or pump_end < 0:
+		_fail("找不到 _pump_enabled() 的函数体，回执纯度这一条没法验（D68）")
+	elif src.substr(pump_start, pump_end - pump_start).contains("_wound"):
+		_fail("_pump_enabled() 读了 _wound：回执反过来喂时间源，纯装饰那条契约没了（D68）")
+	for color in ["WorldClock.COL_LIT", "WorldClock.COL_TRAIL_1", "WorldClock.COL_TRAIL_2",
+			"WorldClock.COL_UNLIT", "WorldClock.COL_SCREEN", "WorldClock.COL_EDGE"]:
+		if not src.contains(color):
+			_fail("回执没取 %s：D68 定的是 D59 世界钟那套在册色，不许另起一份" % color)
+	var anchor_cs: Dictionary = (load(TIME_ANCHOR_SCRIPT) as GDScript).get_script_constant_map()
+	var clock_cs: Dictionary = (load(CLOCK_SCRIPT) as GDScript).get_script_constant_map()
+	if int(anchor_cs.get("RECEIPT_TICKS", -1)) != int(clock_cs.get("TICKS", -2)):
+		_fail("回执格数 %s 与世界钟 TICKS %s 不是同一只表：两处各写一份就会悄悄分家"
+			% [str(anchor_cs.get("RECEIPT_TICKS")), str(clock_cs.get("TICKS"))])
+
+	var player_src := FileAccess.get_file_as_string("res://scenes/actors/player/player.gd")
+	if player_src.count("TimeAnchor.new()") != 1:
+		_fail("Player 造了 %d 根时间锚（应恰好 1：一次只有一根锚，D68）"
+			% player_src.count("TimeAnchor.new()"))
+	if not player_src.contains("_time_anchor.name = \"TimeAnchor\""):
+		_fail("Player 造的锚没固定名字：关卡/调试按名字找它时会落空")
+	if not player_src.contains("_time_anchor.cancel_for_death()"):
+		_fail("Player.die() 没有 cancel_for_death()：被锚着的构件会拖着一根指向尸体的 Callable（D68）")
+	if not player_src.contains("_time_anchor.reset_state()"):
+		_fail("Player.respawn() 没有 reset_state()：上一具身体的链接会跨到复活后的锚上（D68）")
+
+	if not InputMap.has_action(&"anchor"):
+		_fail("InputMap 缺 anchor 动作：锚点发不出去（D68）")
+	else:
+		var has_q := false
+		var has_lmb := false
+		for event in InputMap.action_get_events(&"anchor"):
+			if event is InputEventKey and (event as InputEventKey).physical_keycode == KEY_Q:
+				has_q = true
+			if event is InputEventMouseButton \
+					and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+				has_lmb = true
+		if not has_q:
+			_fail("anchor 动作没绑 Q：D68 的发射键是 Q")
+		if not has_lmb:
+			_fail("anchor 动作没绑鼠标左键：D68 允许按住左键瞄准/松开发射")
+
+	var moving_ok := false
+	for path in _discover_object_scenes():
+		var packed := load(path) as PackedScene
+		if packed == null:
+			continue
+		var node = packed.instantiate()
+		if node == null:
+			continue
+		if node.is_in_group(ANCHOR_GROUP):
+			_anchorables_checked += 1
+			_check_anchorable(node, path)
+			if path == MOVING_BLOCK_SCENE:
+				moving_ok = true
+		node.free()
+	if not moving_ok:
+		_fail("移动方块没进 anchorable 组：D68 第一个可锚物件不在族里，本组等于没测")
+	if _anchorables_checked < 1:
+		_fail("一个 anchorable 都没扫到：族扫描在空转，后面的契约检查都没发生")
+
+
+func _check_anchorable(node: Node, path: String) -> void:
+	if not (node is CollisionObject2D):
+		_fail("%s 在 anchorable 组里但不是实体：锚点射线永远打不到它" % path)
+		return
+	var layer := (node as CollisionObject2D).collision_layer
+	if (layer & (1 | 4)) == 0:
+		_fail("%s 在 anchorable 组里却不在 terrain(1)/time_solid(4) 层（layer=%d）：射线打不到"
+			% [path, layer])
+	if node.get_node_or_null("TimeReceiver") == null:
+		_fail("%s 在 anchorable 组里却没有 TimeReceiver 子节点：吸上去也没有时间源可劫（D68）" % path)
+	if node.has_signal("touched_player"):
+		_fail("%s 在 anchorable 组里却发 touched_player：D66② 锚点物不许是危险物" % path)
+	var script: Script = node.get_script()
+	var guard := 0
+	while script != null and guard < 8:
+		if script.resource_path == HAZARD_BASE_SCRIPT:
+			_fail("%s 在 anchorable 组里却继承 HazardBase：D66② 锚点物不许是危险物" % path)
+			break
+		script = script.get_base_script()
+		guard += 1
+
+
+## 扫 scenes/objects 整棵子树来找锚点族。新构件挂了 anchorable 就自动进守门，
+## 不用回来往白名单里加一行 —— 与关卡自动发现同一条理由。
+func _discover_object_scenes() -> PackedStringArray:
+	var found := PackedStringArray()
+	var pending: Array = ["res://scenes/objects"]
+	while not pending.is_empty():
+		var dir = pending.pop_back() as String
+		var da := DirAccess.open(dir)
+		if da == null:
+			_fail("打不开目录 %s" % dir)
+			continue
+		for sub in da.get_directories():
+			pending.append(dir.path_join(sub))
+		for file in da.get_files():
+			if file.ends_with(".tscn"):
+				found.append(dir.path_join(file))
+	found.sort()
+	return found
 
 
 func _clum(c: Color) -> float:

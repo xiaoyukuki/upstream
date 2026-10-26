@@ -10,21 +10,42 @@ extends Node
 ## 结构面：16 张地形 tile 各带且仅带一块整格碰撞多边形；装饰 tile 零碰撞；
 ## 模板里 WallFill/Decor/Tiles 三层的 z 序、碰撞开关、layer/mask、共用同一个 TileSet。
 ##
+## D67 起这套断言对**每一套落盘的配色各跑一遍**（g 与 d）。这一条不是顺手加的量，
+## 它钉的是「第二套与第一套逐格同源」：同一份掩码表、同一批图集坐标、同一个 terrain 求解器
+## 结果集。哪一天有人把 `tiles_d.json` 手改成另一套排布，红的是这里，而不是某个人的关刷出错图。
+## FAIL 行前面带 `[g]` / `[d]`，两套混跑时才知道该回去查哪一份产物。
+##
 ## 跑法：Godot --headless --path <项目根> res://tools/tileset_selftest.tscn
 
-const MANIFEST := "res://assets/tiles/tiles.json"
-const TILESET := "res://assets/tiles/lab_tileset.tres"
+## 顺序有意义：第一套 = 模板与现有关指的那一套（下面 `_check_template` 拿它比身份）。
+## `style` 是这一对**应该**声明的风格 —— 清单里那个字段被人手改过时，这里当场对不上。
+const SETS := [
+	{
+		"label": "g",
+		"style": "g",
+		"manifest": "res://assets/tiles/tiles.json",
+		"tileset": "res://assets/tiles/lab_tileset.tres",
+	},
+	{
+		"label": "d",
+		"style": "d",
+		"manifest": "res://assets/tiles/tiles_d.json",
+		"tileset": "res://assets/tiles/lab_tileset_d.tres",
+	},
+]
 const TEMPLATE := "res://scenes/levels/level_template.tscn"
 
 var _fails := 0
 var _checks := 0
+## 当前在验哪一套。只为"红了知道查哪份产物"存在，不参与任何判据。
+var _scope := ""
 
 
 func _ok(cond: bool, msg: String) -> void:
 	_checks += 1
 	if not cond:
 		_fails += 1
-		print("FAIL ", msg)
+		print("FAIL ", _scope, msg)
 
 
 func _lum(img: Image, x: int, y: int) -> float:
@@ -33,19 +54,57 @@ func _lum(img: Image, x: int, y: int) -> float:
 
 
 func _ready() -> void:
-	var fh := FileAccess.open(MANIFEST, FileAccess.READ)
-	_ok(fh != null, "tiles.json 存在 —— 先跑 py tools/gen_tiles.py")
+	var built: Array = []
+	var shipped: TileSet = null
+	for def in SETS:
+		_scope = "[%s] " % str(def["label"])
+		var ts := _check_set(str(def["manifest"]), str(def["tileset"]), str(def["style"]))
+		if shipped == null:
+			shipped = ts
+		if ts != null:
+			built.append([str(def["label"]), ts])
+	_check_sets_distinct(built)
+	_check_template(shipped)
+	_scope = ""
+	_finish()
+
+
+## 两套（或多套）落盘的配色**不许挂着同一张图集**。
+## 这是换风格这件事上唯一一种静默失败：`tiles_d.json` 被人手改成 g 的文件名、或
+## 生成器里那条路径被改回写死 —— 于是 d 的 TileSet 挂着 g 的图。它不报错、不崩，
+## 连 peering bit 都是对的，只是新关刷出来还是旧配色，而没人会去查一份 json。
+func _check_sets_distinct(built: Array) -> void:
+	for i in built.size():
+		for j in range(i + 1, built.size()):
+			var a: TileSet = built[i][1]
+			var b: TileSet = built[j][1]
+			_scope = "[%s/%s] " % [built[i][0], built[j][0]]
+			for s in 2:
+				var src_a: TileSetAtlasSource = a.get_source(s) as TileSetAtlasSource
+				var src_b: TileSetAtlasSource = b.get_source(s) as TileSetAtlasSource
+				if src_a == null or src_b == null:
+					continue
+				var pa: String = src_a.texture.resource_path
+				var pb: String = src_b.texture.resource_path
+				_ok(pa != pb, "source %d 两张图不能是同一张（都是 %s）" % [s, pa])
+
+
+## 一套图集 + 一份 TileSet 的全部结构断言。返回加载到的 TileSet（给模板那段比身份用）。
+func _check_set(manifest_path: String, tileset_path: String, expect_style: String) -> TileSet:
+	var fh := FileAccess.open(manifest_path, FileAccess.READ)
+	_ok(fh != null, "%s 存在 —— 先跑 py tools/gen_tiles.py" % manifest_path.get_file())
 	if fh == null:
-		_finish()
-		return
+		return null
 	var m: Dictionary = JSON.parse_string(fh.get_as_text())
+	# 清单是预览图与 TileSet 共同的唯一来源，它自己声明错风格就是"两份产物都对着一套不存在的东西"。
+	_ok(str(m.get("style", "")) == expect_style,
+			"清单声明 style == %s，实测 %s" % [expect_style, str(m.get("style", ""))])
 	var tile: int = int(m["tile"])
 
-	var ts := load(TILESET) as TileSet
-	_ok(ts != null, "lab_tileset.tres 能加载 —— 先跑 build_tileset.gd")
+	var ts := load(tileset_path) as TileSet
+	_ok(ts != null, "%s 能加载 —— 先跑 build_tileset.gd" % tileset_path.get_file())
 	if ts == null:
-		_finish()
-		return
+		return null
 	_ok(ts.tile_size == Vector2i(tile, tile), "TileSet.tile_size = %d px" % tile)
 	_ok(ts.get_physics_layers_count() == 1, "物理层恰好 1 个")
 	_ok(ts.get_physics_layer_collision_layer(0) == 1, "物理层 collision_layer = 1")
@@ -58,8 +117,13 @@ func _ready() -> void:
 	var decor := ts.get_source(1) as TileSetAtlasSource
 	_ok(terrain != null and decor != null, "source 0/1 都在")
 	if terrain == null or decor == null:
-		_finish()
-		return
+		return null
+	# 图集文件名一律从清单读：清单里写的与实际挂进 TileSet 的必须是同一张，
+	# 否则第二套配色会悄悄挂着第一套的图（不报错、不崩，只是刷出来是旧配色）。
+	_ok(terrain.texture.resource_path.ends_with(str(m["terrain"]["file"])),
+			"地形源挂的是清单里那张（%s）" % str(m["terrain"]["file"]))
+	_ok(decor.texture.resource_path.ends_with(str(m["decor"]["file"])),
+			"装饰源挂的是清单里那张（%s）" % str(m["decor"]["file"]))
 	var timg: Image = terrain.texture.get_image()
 	var dimg: Image = decor.texture.get_image()
 	_ok(timg.get_width() % tile == 0 and timg.get_height() % tile == 0, "地形图集边长是 %d 的倍数" % tile)
@@ -170,6 +234,7 @@ func _ready() -> void:
 	# ---- 引擎真的会按掩码选图：刷一块 5x3 实心，读回每格选中的图集坐标。
 	# 预览图用的是 gen_tiles.py 自己的掩码逻辑，验不到 peering bit 的方向有没有接反；
 	# 这一组让 Godot 的 terrain 求解器自己选，选错说明 bit 映射反了。
+	# 期望值两套**共用同一份**：它钉的既是方向也是"两套逐格同源"。
 	var probe := TileMapLayer.new()
 	probe.tile_set = ts
 	add_child(probe)
@@ -189,10 +254,16 @@ func _ready() -> void:
 		var got: Vector2i = probe.get_cell_atlas_coords(c)
 		_ok(got == expect[c], "terrain 笔刷在 %s 应选 %s，实测 %s" % [str(c), str(expect[c]), str(got)])
 	probe.queue_free()
+	return ts
 
-	# ---- 模板三层
+
+## 模板那三层只认落盘的那一套（g）—— D67 换风格不动模板，新关自己把 tile_set 指过去。
+func _check_template(ts: TileSet) -> void:
+	_scope = ""
 	var scene := load(TEMPLATE) as PackedScene
 	_ok(scene != null, "level_template.tscn 能加载")
+	if scene == null:
+		return
 	var root: Node2D = scene.instantiate()
 	add_child(root)
 	var wf := root.get_node_or_null("Terrain/WallFill") as TileMapLayer
@@ -205,7 +276,6 @@ func _ready() -> void:
 		_ok(tl.collision_enabled, "Tiles 开着碰撞（layer/mask 在 TileSet 物理层上，上面已断言）")
 		_ok(wf.tile_set == ts and dc.tile_set == ts and tl.tile_set == ts, "三层共用 lab_tileset.tres")
 	root.queue_free()
-	_finish()
 
 
 func _finish() -> void:
