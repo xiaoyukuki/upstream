@@ -20,6 +20,9 @@ const SCRIPTS := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://scenes/objects/clock/clock.gd",
+	"res://components/clock_device.gd",
+	"res://scenes/objects/phase_panel/phase_panel.gd",
+	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
 	"res://components/time_receiver.gd",
 	"res://components/hazard_base.gd",
 	"res://scenes/levels/level_base.gd",
@@ -49,6 +52,9 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://scenes/objects/clock/clock.gd",
+	"res://components/clock_device.gd",
+	"res://scenes/objects/phase_panel/phase_panel.gd",
+	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
 	"res://components/hazard_base.gd",
 ]
 
@@ -72,6 +78,8 @@ const SCENES := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
 	"res://scenes/objects/fall_zone/fall_zone.tscn",
 	"res://scenes/objects/clock/clock.tscn",
+	"res://scenes/objects/phase_panel/phase_panel.tscn",
+	"res://scenes/objects/phase_shuttle/phase_shuttle.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
 	"res://scenes/levels/rooms/teaching_corridor.tscn",
 	"res://scenes/levels/main.tscn",
@@ -100,6 +108,9 @@ const EXPORTS := {
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/objects/clock/clock.gd": ["period"],
+	"res://components/clock_device.gd": ["period", "duty", "phase"],
+	"res://scenes/objects/phase_panel/phase_panel.gd": ["panel_size"],
+	"res://scenes/objects/phase_shuttle/phase_shuttle.gd": ["step_size", "offset"],
 	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
@@ -135,6 +146,11 @@ const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
 const CLOCK_SCRIPT := "res://scenes/objects/clock/clock.gd"
 const TIME_ANCHOR_SCRIPT := "res://scenes/actors/player/time_anchor.gd"
 const MOVING_BLOCK_SCENE := "res://scenes/objects/moving_block/moving_block.tscn"
+const CLOCK_DEVICE_SCRIPT := "res://components/clock_device.gd"
+const PHASE_PANEL_SCRIPT := "res://scenes/objects/phase_panel/phase_panel.gd"
+const PHASE_PANEL_SCENE := "res://scenes/objects/phase_panel/phase_panel.tscn"
+const PHASE_SHUTTLE_SCRIPT := "res://scenes/objects/phase_shuttle/phase_shuttle.gd"
+const PHASE_SHUTTLE_SCENE := "res://scenes/objects/phase_shuttle/phase_shuttle.tscn"
 ## 锚点物不许是危险物（D66②）。HazardBase 是这一章"会杀人"的形状，按继承链认它，
 ## 不按具体构件点名 —— 将来新加的危险物也逃不过。
 const HAZARD_BASE_SCRIPT := "res://components/hazard_base.gd"
@@ -230,6 +246,7 @@ func _process(_delta: float) -> bool:
 	_verify_piston()
 	_verify_fall_zone()
 	_verify_clock()
+	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
@@ -737,6 +754,155 @@ func _verify_clock() -> void:
 	clock.free()
 
 
+## D69 周期器件：相位面板 + 相位穿梭块。静态这一遍钉的全是"改了不响、要到试玩才露馅"那几类：
+## ① 时基只有 `TimeReceiver` 一条 —— 器件里出现 `elapsed_world_time` / `TimeManager.get_*_delta`
+##    就是"看着在动、但锚点劫持不到"，而画面不会报错；
+## ② 物理世界里只有一条状态通道（无 `_process`）；
+## ③ 变实之前必须问占位（`CLEAR_MASK = 2|4` + `intersect_shape`），否则平台会塞进玩家身体里；
+## ④ 面板的底座永远实、只有桥面切碰撞体；穿梭块是整块瞬移，不存在中间位置；
+## ⑤ 两件都要进 `anchorable` 族、挂 `TimeReceiver`、上 time_solid 层（射线打得到）；
+## ⑥ 改导出项后派生几何重算，且同场景的另一个实例不被一起改（D21 那笔账）。
+## 真物理下的行为（世界钟/手/占位停住）归 kit_selftest 第 23 组。
+func _verify_clock_devices() -> void:
+	for path in [CLOCK_DEVICE_SCRIPT, PHASE_PANEL_SCRIPT, PHASE_SHUTTLE_SCRIPT]:
+		var src := FileAccess.get_file_as_string(path)
+		if src.is_empty():
+			_fail("读不到 %s" % path)
+			continue
+		if src.contains("func _process("):
+			_fail("%s 里出现了 _process：周期器件的状态只能走物理通道（D69）" % path)
+		for banned in ["elapsed_world_time", "TimeManager.get_physics_delta",
+				"TimeManager.get_process_delta", "Engine.time_scale", "run_state"]:
+			if src.contains(banned):
+				_fail("%s 里出现了 %s：器件的时基只能走 TimeReceiver，直读全局量锚点劫持不到（D69）"
+					% [path, banned])
+	var base_src := FileAccess.get_file_as_string(CLOCK_DEVICE_SCRIPT)
+	if not base_src.contains("_receiver.get_physics_delta()"):
+		_fail("ClockDevice 没从 TimeReceiver 读 delta：锚点吸上去也换不掉它的时基（D69）")
+	if not base_src.contains("params.collision_mask = CLEAR_MASK") \
+			or not base_src.contains("intersect_shape"):
+		_fail("ClockDevice 不再问目标位置占不占：把变实的平台塞进玩家身体里不会有人拦（D69）")
+	if not FileAccess.get_file_as_string(PHASE_PANEL_SCRIPT).contains("col.disabled = not on"):
+		_fail("PhasePanel 不再切换 PanelShape：桥面会一直实或一直虚（D69）")
+	if not FileAccess.get_file_as_string(PHASE_SHUTTLE_SCRIPT) \
+			.contains("global_position = _stop_global(on)"):
+		_fail("PhaseShuttle 不再整块瞬移：中间位置一出现，「离散两态」这条就没了（D69）")
+
+	var panel = load(PHASE_PANEL_SCENE).instantiate()
+	panel.position = Vector2(9000.0, 9000.0)
+	root.add_child(panel)
+	var twin_panel = load(PHASE_PANEL_SCENE).instantiate()
+	twin_panel.position = Vector2(9100.0, 9000.0)
+	root.add_child(twin_panel)
+	if panel.collision_layer != 4 or panel.collision_mask != 0:
+		_fail("PhasePanel layer=%d mask=%d（应 4/0：玩家能踩、自己不去探任何东西）"
+			% [panel.collision_layer, panel.collision_mask])
+	if not panel.is_in_group(ANCHOR_GROUP) \
+			or panel.get_node_or_null("TimeReceiver") == null:
+		_fail("PhasePanel 不在 anchorable 族或缺 TimeReceiver：锚点射线打上去也吸不住（D69）")
+	var base_col: CollisionShape2D = panel.get_node("BaseShape")
+	var panel_col: CollisionShape2D = panel.get_node("PanelShape")
+	if base_col.shape.size != Vector2(32.0, 16.0) or base_col.position != Vector2.ZERO:
+		_fail("PhasePanel 底座 %s @ %s（默认应 32x16 @ (0,0)）"
+			% [str(base_col.shape.size), str(base_col.position)])
+	if base_col.disabled:
+		_fail("PhasePanel 的底座被禁用了：桥面一虚，玩家站的地方就没了（D69 裁定 D1）")
+	if panel_col.shape.size != Vector2(96.0, 16.0):
+		_fail("PhasePanel 桥面 %s（默认应 96x16）" % str(panel_col.shape.size))
+	if not is_equal_approx(base_col.position.y - base_col.shape.size.y * 0.5,
+			panel_col.position.y - panel_col.shape.size.y * 0.5):
+		_fail("PhasePanel 桥面上沿与底座上沿不齐：踩面会出现一级看不见的台阶")
+	if not panel.is_on() or panel.is_blocked():
+		_fail("PhasePanel 开局相位 0 应在开窗口里且未被占（is_on=%s is_blocked=%s）"
+			% [str(panel.is_on()), str(panel.is_blocked())])
+
+	# 相位映射与"底座永远实、只有桥面切"这两条，直接看两态。
+	panel.phase = 1.0
+	panel.set("_clock", 0.0)
+	panel._refresh_state(panel.cycle_on())
+	if panel.is_on() or not panel_col.disabled or base_col.disabled:
+		_fail("PhasePanel 关窗口里桥面没退成虚体/底座跟着退了（is_on=%s panel_disabled=%s base_disabled=%s）"
+			% [str(panel.is_on()), str(panel_col.disabled), str(base_col.disabled)])
+	panel.phase = 0.0
+	panel._refresh_state(panel.cycle_on())
+	if not panel.is_on() or panel_col.disabled or base_col.disabled:
+		_fail("PhasePanel 回开窗口时桥面没变实/底座被牵连（is_on=%s panel_disabled=%s base_disabled=%s）"
+			% [str(panel.is_on()), str(panel_col.disabled), str(base_col.disabled)])
+	panel.period = 2.0
+	panel.duty = 0.5
+	panel.phase = 0.0
+	var phase_ok := true
+	for sample in [[0.5, true], [1.5, false], [2.5, true]]:
+		panel.set("_clock", sample[0])
+		if panel.cycle_on() != sample[1]:
+			phase_ok = false
+	if not phase_ok:
+		_fail("PhasePanel 的 cycle_on() 映射不对（period 2 / duty 0.5：0.5 开、1.5 关、2.5 开）")
+	panel.panel_size = Vector2(64.0, 24.0)
+	var twin_panel_col: CollisionShape2D = twin_panel.get_node("PanelShape")
+	if panel_col.shape.size != Vector2(64.0, 24.0):
+		_fail("PhasePanel 改 panel_size 后桥面盒没重算：%s" % str(panel_col.shape.size))
+	if twin_panel_col.shape.size != Vector2(96.0, 16.0):
+		_fail("改一块面板的 panel_size 波及另一块：%s（应还是 96x16，两块共用了同一份形状资源）"
+			% str(twin_panel_col.shape.size))
+
+	var shuttle = load(PHASE_SHUTTLE_SCENE).instantiate()
+	shuttle.position = Vector2(9000.0, 8000.0)
+	root.add_child(shuttle)
+	var twin_shuttle = load(PHASE_SHUTTLE_SCENE).instantiate()
+	twin_shuttle.position = Vector2(9100.0, 8000.0)
+	root.add_child(twin_shuttle)
+	if shuttle.collision_layer != 4 or shuttle.collision_mask != 0:
+		_fail("PhaseShuttle layer=%d mask=%d（应 4/0）"
+			% [shuttle.collision_layer, shuttle.collision_mask])
+	if not shuttle.is_in_group(ANCHOR_GROUP) \
+			or shuttle.get_node_or_null("TimeReceiver") == null:
+		_fail("PhaseShuttle 不在 anchorable 族或缺 TimeReceiver（D69）")
+	var step_col: CollisionShape2D = shuttle.get_node("StepShape")
+	if step_col.shape.size != Vector2(48.0, 16.0) or step_col.position != Vector2.ZERO:
+		_fail("PhaseShuttle 踏板盒 %s @ %s（默认应 48x16 @ (0,0)）"
+			% [str(step_col.shape.size), str(step_col.position)])
+	if step_col.disabled:
+		_fail("PhaseShuttle 的踏板被禁用了：两个停靠点之间没有实体可站（D69）")
+	if not shuttle.is_on() or shuttle.is_blocked():
+		_fail("PhaseShuttle 开局应停在 A 点且未被占（is_on=%s is_blocked=%s）"
+			% [str(shuttle.is_on()), str(shuttle.is_blocked())])
+	if shuttle.global_position != Vector2(9000.0, 8000.0):
+		_fail("PhaseShuttle 开局不在摆下去那一点：%s（应 (9000,8000)）"
+			% str(shuttle.global_position))
+
+	shuttle.phase = 1.0
+	shuttle.set("_clock", 0.0)
+	shuttle._refresh_state(shuttle.cycle_on())
+	if shuttle.is_on() or step_col.disabled \
+			or shuttle.global_position != Vector2(9000.0, 7936.0):
+		_fail("PhaseShuttle 关窗口里没瞬移到 B 点：is_on=%s pos=%s（应 (9000,7936)）"
+			% [str(shuttle.is_on()), str(shuttle.global_position)])
+	shuttle.phase = 0.0
+	shuttle._refresh_state(shuttle.cycle_on())
+	if not shuttle.is_on() or shuttle.global_position != Vector2(9000.0, 8000.0):
+		_fail("PhaseShuttle 回开窗口时没回 A 点：pos=%s（应 (9000,8000)）"
+			% str(shuttle.global_position))
+	shuttle.offset = Vector2(64.0, 0.0)
+	shuttle.phase = 1.0
+	shuttle.set("_clock", 0.0)
+	shuttle._refresh_state(shuttle.cycle_on())
+	if shuttle.global_position != Vector2(9064.0, 8000.0):
+		_fail("PhaseShuttle 改 offset 后 B 点没跟着走：pos=%s（应 (9064,8000)）"
+			% str(shuttle.global_position))
+	shuttle.step_size = Vector2(32.0, 16.0)
+	var twin_step_col: CollisionShape2D = twin_shuttle.get_node("StepShape")
+	if step_col.shape.size != Vector2(32.0, 16.0):
+		_fail("PhaseShuttle 改 step_size 后踏板盒没重算：%s" % str(step_col.shape.size))
+	if twin_step_col.shape.size != Vector2(48.0, 16.0):
+		_fail("改一块穿梭块的 step_size 波及另一块：%s（应还是 48x16）"
+			% str(twin_step_col.shape.size))
+
+	for node in [panel, twin_panel, shuttle, twin_shuttle]:
+		root.remove_child(node)
+		node.free()
+
+
 ## D62 祭坛那次自动存档（用户裁定「只写重生位、不给灯」）。钉的全是"这一拍悄悄改名换姓"那三类：
 ## ① 祭坛不许加入存档点那一族 —— 不发 `checkpoint_reached`、不实现 claim/release。它一旦发了，
 ##    `LevelBase._bind_checkpoints()` 的全子树扫描会**自动**把它算成一台存档点，"不给灯"这条裁定
@@ -839,6 +1005,8 @@ func _verify_time_anchor() -> void:
 			_fail("anchor 动作没绑鼠标左键：D68 允许按住左键瞄准/松开发射")
 
 	var moving_ok := false
+	var panel_ok := false
+	var shuttle_ok := false
 	for path in _discover_object_scenes():
 		var packed := load(path) as PackedScene
 		if packed == null:
@@ -851,9 +1019,20 @@ func _verify_time_anchor() -> void:
 			_check_anchorable(node, path)
 			if path == MOVING_BLOCK_SCENE:
 				moving_ok = true
+			if path == PHASE_PANEL_SCENE:
+				panel_ok = true
+			if path == PHASE_SHUTTLE_SCENE:
+				shuttle_ok = true
 		node.free()
 	if not moving_ok:
 		_fail("移动方块没进 anchorable 组：D68 第一个可锚物件不在族里，本组等于没测")
+	if not panel_ok:
+		_fail("相位面板没进 anchorable 组：D69 的两件新器件缺了一件")
+	if not shuttle_ok:
+		_fail("相位穿梭块没进 anchorable 组：D69 的两件新器件缺了一件")
+	if _anchorables_checked < 3:
+		_fail("只扫到 %d 个 anchorable（移动方块 + 相位面板 + 相位穿梭块至少 3 个）："
+			% _anchorables_checked + "族扫描漏了谁")
 	if _anchorables_checked < 1:
 		_fail("一个 anchorable 都没扫到：族扫描在空转，后面的契约检查都没发生")
 

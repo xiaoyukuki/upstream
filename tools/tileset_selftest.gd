@@ -15,6 +15,10 @@ extends Node
 ## 结果集。哪一天有人把 `tiles_d.json` 手改成另一套排布，红的是这里，而不是某个人的关刷出错图。
 ## FAIL 行前面带 `[g]` / `[d]`，两套混跑时才知道该回去查哪一份产物。
 ##
+## D70 起两套的**装饰词汇表不再相同**（d 换成树丛那一套，还多出七件），所以"同源"这条
+## 从"两张清单相等"收窄成"共有的那些条目矩形逐格相同 + 第一套的条目在每一套里都在"，
+## 见 `_check_sets_share_rects`。地形那 16 格仍然要求两套一模一样。
+##
 ## 跑法：Godot --headless --path <项目根> res://tools/tileset_selftest.tscn
 
 ## 顺序有意义：第一套 = 模板与现有关指的那一套（下面 `_check_template` 拿它比身份）。
@@ -55,6 +59,7 @@ func _lum(img: Image, x: int, y: int) -> float:
 
 func _ready() -> void:
 	var built: Array = []
+	var items: Array = []          # [label, 条目表]，**按 SETS 的顺序**：第一套 = 落盘那套
 	var shipped: TileSet = null
 	for def in SETS:
 		_scope = "[%s] " % str(def["label"])
@@ -63,10 +68,53 @@ func _ready() -> void:
 			shipped = ts
 		if ts != null:
 			built.append([str(def["label"]), ts])
+		items.append([str(def["label"]), _read_items(str(def["manifest"]))])
 	_check_sets_distinct(built)
+	_check_sets_share_rects(items)
 	_check_template(shipped)
 	_scope = ""
 	_finish()
+
+
+## 读一份清单的装饰条目表。只为下面那条「两套共有条目必须逐格相同」存在。
+func _read_items(manifest_path: String) -> Dictionary:
+	var fh := FileAccess.open(manifest_path, FileAccess.READ)
+	if fh == null:
+		return {}
+	var m: Variant = JSON.parse_string(fh.get_as_text())
+	if typeof(m) != TYPE_DICTIONARY:
+		return {}
+	return Dictionary((m as Dictionary)["decor"].get("items", {}))
+
+
+## 两套共有的装饰条目，矩形必须一格不差；而**第一套（落盘那套）的条目必须在每一套里都有**。
+##
+## 这条钉的是 D67 那句「旧关的摆图层可以整层复制过来」—— 它成立的前提从来不是"两套长得像"，
+## 而是**同一批条目名指向同一批图集坐标**。D70 给第二套加了七件新皮之后，这个前提第一次
+## 出现了不对称（两套的条目数不再相等），于是它第一次可以被破坏而没人报错：只要有人把
+## 其中一套的某个矩形挪一格，复制过去的那一层就会整块皮错位，而瓦片数、alpha、碰撞全照绿。
+## 方向是单向的：旧 → 新 才是要保住的那条路，所以新套多条目合法、少条目不合法。
+func _check_sets_share_rects(sets_items: Array) -> void:
+	if sets_items.size() < 2:
+		return
+	var base_label: String = str(sets_items[0][0])
+	var base: Dictionary = sets_items[0][1]
+	for i in range(1, sets_items.size()):
+		var label: String = str(sets_items[i][0])
+		var other: Dictionary = sets_items[i][1]
+		_scope = "[%s/%s] " % [base_label, label]
+		for name in base:
+			var want: Array = base[name]
+			if not other.has(name):
+				_ok(false, "条目 %s 在落盘那套里有、在 %s 里没有 —— 旧关那一层复制过去会掉一块皮" % [name, label])
+				continue
+			var got: Array = other[name]
+			_ok(want == got, "共有条目 %s 的矩形两套必须相同：%s vs %s" % [name, want, got])
+		var extra: int = 0
+		for name in other:
+			if not base.has(name):
+				extra += 1
+		_ok(extra <= 8, "%s 比落盘那套多出 %d 条 —— 多到这张词汇表装不下，先怀疑清单串了" % [label, extra])
 
 
 ## 两套（或多套）落盘的配色**不许挂着同一张图集**。

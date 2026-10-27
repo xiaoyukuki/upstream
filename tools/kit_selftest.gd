@@ -70,11 +70,19 @@ extends Node
 ##     世界那道 0.08 s 缓冲；E 当帧断链、目标立刻回世界钟且相位不被清；回执亮格是 wound
 ##     的纯函数（纯装饰）；回程不理碰撞，目标被释放从最后一格收回；死亡断链、复活回手上，
 ##     全程不进 run_state。
+## 23) 相位器件（D69）：这一族的行为矩阵一共六行，把「平时受世界钟、被锚吸住时跟手」
+##     这条分界整个钉住 —— 未吸附时世界流着它自己开合、世界冻着它停；吸附后人站着
+##     世界流着它照停、按着方向键世界冻着它照走；移动中回收当帧停衰、站着回收立刻
+##     回世界钟且相位不清零。另钉四件"改坏了不响"的：幽灵态也打得到（底座常实）、
+##     变实前问占位（玩家/层 4 挡住就停在旧状态）、相切不误判（探针内缩 1 px）、
+##     period 0 与 duty 0/1 两个极端。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
 const TAG := "[kit-selftest]"
 const BLOCK_ANCHOR := Vector2(500, -200)
+const PHASE_PANEL_SCENE := "res://scenes/objects/phase_panel/phase_panel.tscn"
+const PHASE_SHUTTLE_SCENE := "res://scenes/objects/phase_shuttle/phase_shuttle.tscn"
 ## 第 15 组生产链用：把整个关卡实例抬到半空，脚下才算真的没有底。
 ## 不抬不行 —— 第 5 节那块地面的顶边正好落在 y=0、铺满 x -800..3200，存档点那一排（x 650~900）
 ## 就摆在它上面，人在那儿是"站着"，坠不出东西给网接。
@@ -272,6 +280,7 @@ func _ready() -> void:
 	await _test_grant_d61()
 	await _test_altar_save()
 	await _test_time_anchor()
+	await _test_phase_devices()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -2311,6 +2320,381 @@ func _test_time_anchor() -> void:
 		(stray as Node).queue_free()
 	await _frame(2)
 	TimeManager.reset_state()
+
+
+## 第 23 组：相位器件（D69）。六行行为矩阵 + 四条安全/边界，见文件头第 23 条。
+## 全部走生产入口：真实 Input 动作驱动玩家、真实 TimeManager 冻结、真实锚点射线。
+## 器件里唯一直接碰的内部量是 `_clock`（与第 22 组碰 `elapsed_path_time` 同一口径：
+## 守门要读的是"表走没走"，不是它怎么走的）。
+func _test_phase_devices() -> void:
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(3)
+
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+
+	_solid_box(Vector2(1500.0, 300.0), Vector2(4000.0, 600.0))
+	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	walker.position = Vector2(1000.0, -Player.COLLISION_HALF_HEIGHT)
+	add_child(walker)
+	# 两个器件都挂在同一条地面线上方 10 px：16 px 厚的盒子占 y -26..-10，
+	# 站着的人的胸高是 -18 —— 平地横打刚好打在盒子里（真关卡里对着脚下的桥面往下瞄）。
+	var panel = _phase_instance(PHASE_PANEL_SCENE, "Panel", Vector2(1300.0, -18.0),
+		0.5, 0.5, 0.0)
+	var shuttle = _phase_instance(PHASE_SHUTTLE_SCENE, "Shuttle", Vector2(1800.0, -18.0),
+		0.5, 0.5, 0.0)
+	await _frame(3)
+
+	var anchor: TimeAnchor = walker.time_anchor()
+	var panel_rx: TimeReceiver = panel.get_node("TimeReceiver") as TimeReceiver
+	var shuttle_rx: TimeReceiver = shuttle.get_node("TimeReceiver") as TimeReceiver
+	_check("器件进了 anchorable 族、挂着 TimeReceiver，锚在手上",
+		panel.is_in_group(&"anchorable") and shuttle.is_in_group(&"anchorable")
+		and panel_rx != null and shuttle_rx != null
+		and anchor.current_state() == TimeAnchor.State.IDLE)
+
+	# —— ① 未吸附 + 世界流着：自己走表、状态自己翻。 ——
+	var clock_flowing: float = panel.get("_clock")
+	await _frame(10)
+	_check("世界流着：未吸附的面板自己走表",
+		panel.get("_clock") > clock_flowing and shuttle.get("_clock") > clock_flowing)
+	var saw_on := false
+	var saw_off := false
+	var guard := 0
+	while guard < 40:
+		guard += 1
+		await _frame(1)
+		saw_on = saw_on or panel.is_on()
+		saw_off = saw_off or not panel.is_on()
+	_check("世界流着：未吸附的面板自己开合（两态都真的到过）", saw_on and saw_off)
+
+	# —— ② 未吸附 + 世界冻着：表不走、状态不翻、位置不动。 ——
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("前提：有移动意图即世界冻结", TimeManager.is_time_frozen())
+	var clock_frozen: float = panel.get("_clock")
+	var shuttle_clock_frozen: float = shuttle.get("_clock")
+	var panel_on_frozen: bool = panel.is_on()
+	var shuttle_pos_frozen: Vector2 = shuttle.global_position
+	await _frame(20)
+	_check("世界冻着：未吸附的器件表不走、状态不翻、块不挪",
+		panel.get("_clock") == clock_frozen
+		and shuttle.get("_clock") == shuttle_clock_frozen
+		and panel.is_on() == panel_on_frozen
+		and shuttle.global_position == shuttle_pos_frozen)
+	TimeManager.notify_movement_intent(false)
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：松开缓冲走完，世界重新流动", TimeManager.get_physics_delta() > 0.0)
+
+	# —— ③ 幽灵态也打得到：桥面关着，底座那 32x16 还在，锚点射线不会穿过去打空。 ——
+	_phase_force(panel, false)
+	await _frame(2)
+	_check("前提：面板此刻是关的（只有底座实）", not panel.is_on())
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("对准关着的面板出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("桥面虚着也能吸附（底座常实，射线打在壳上）",
+		anchor.current_state() == TimeAnchor.State.ATTACHED
+		and anchor.attached_target() == panel and not panel.is_on())
+
+	# —— ④ 吸附 + 人站着、世界流着：表不走（时间源跟手，不跟世界钟）。 ——
+	TimeManager.notify_movement_intent(false)
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：世界流着、人站着", TimeManager.get_physics_delta() > 0.0)
+	var clock_attached_idle: float = panel.get("_clock")
+	await _frame(10)
+	_check("吸附中、人站着：世界流着但器件不吃世界钟",
+		panel_rx.get_physics_delta() == 0.0
+		and panel.get("_clock") == clock_attached_idle)
+
+	# —— ⑤ 吸附 + 按着方向键、世界冻着：表照走、状态照翻（手把器件推过边界）。 ——
+	panel.period = 0.5
+	panel.duty = 0.5
+	panel.phase = 0.0
+	panel.set("_clock", 0.34)
+	panel._refresh_state(panel.cycle_on())
+	await _frame(2)
+	_check("前提：面板停在关窗口的后半段（再走 0.16 s 才翻）", not panel.is_on())
+	Input.action_press(&"move_right")
+	guard = 0
+	while panel_rx.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("世界冻着、按着方向键：锚着的面板拿到真实 delta",
+		TimeManager.is_time_frozen() and panel_rx.get_physics_delta() > 0.0)
+	var clock_crank: float = panel.get("_clock")
+	await _frame(3)
+	_check("手上的 delta 在推进器件的表", panel.get("_clock") > clock_crank)
+	guard = 0
+	while not panel.is_on() and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("按着方向键：面板在自己的窗口里变实（手推过了边界）", panel.is_on())
+
+	# —— ⑥ 撒手当帧停；世界那道 0.08 s 缓冲走完之后也不许它偷偷跟世界钟。 ——
+	Input.action_release(&"move_right")
+	await _frame(3)
+	_check("撒手当帧停：锚着时不等世界那道 0.08 s 缓冲",
+		panel_rx.get_physics_delta() == 0.0)
+	var clock_released: float = panel.get("_clock")
+	await _frame(10)
+	_check("撒手后器件的表不再走", panel.get("_clock") == clock_released)
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	_check("前提：松手缓冲走完，世界重新在流动", TimeManager.get_physics_delta() > 0.0)
+	var clock_idle_again: float = panel.get("_clock")
+	await _frame(10)
+	_check("世界回来了、人站着：锚着的器件仍然不走表（跟手不跟世界钟）",
+		panel_rx.get_physics_delta() == 0.0 and panel.get("_clock") == clock_idle_again)
+
+	# —— ⑦ 站着回收：当帧断链、目标立刻回世界钟、相位不清零。 ——
+	var phase_at_recall: float = panel.get("_clock")
+	Input.action_press(&"interact")
+	await _frame(2)
+	Input.action_release(&"interact")
+	_check("E 回收：链接当帧断开", not anchor.has_link()
+		and anchor.current_state() != TimeAnchor.State.ATTACHED)
+	_check("站着回收：目标当帧回世界钟", panel_rx.get_physics_delta() > 0.0)
+	await _frame(10)
+	_check("回收后目标接着走世界钟，相位不回到 0",
+		phase_at_recall > 0.0 and panel.get("_clock") > phase_at_recall)
+
+	# —— ⑧ 移动中回收、世界冻着：当帧停表，回世界钟（此刻世界钟就是 0）。 ——
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	walker.global_position = Vector2(1000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	panel.period = 0.5
+	panel.duty = 0.5
+	panel.phase = 0.0
+	panel.set("_clock", 0.34)
+	panel._refresh_state(panel.cycle_on())
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	var phase_before_attach: float = panel.get("_clock")
+	_check("再出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("前提：吸附成功，且吸附本身不碰目标的相位",
+		anchor.current_state() == TimeAnchor.State.ATTACHED
+		and panel.get("_clock") == phase_before_attach)
+	Input.action_press(&"move_right")
+	guard = 0
+	while panel_rx.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	var clock_moving: float = panel.get("_clock")
+	await _frame(3)
+	_check("移动中吸附：器件表在走", panel.get("_clock") > clock_moving)
+	Input.action_press(&"interact")
+	await _frame(3)
+	Input.action_release(&"interact")
+	var clock_after_recall: float = panel.get("_clock")
+	_check("移动中 E 回收：链接当帧断开", not anchor.has_link())
+	_check("世界冻着时回收：目标当帧停表（回世界钟，世界钟 = 0）",
+		panel_rx.get_physics_delta() == 0.0)
+	await _frame(10)
+	_check("冻着回收后目标一动不动（不是回到 0 重新开始）",
+		panel.get("_clock") == clock_after_recall and clock_after_recall > 0.0)
+	Input.action_release(&"move_right")
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	var clock_resumed: float = panel.get("_clock")
+	await _frame(10)
+	_check("松手、世界回来后目标接着走世界钟", panel.get("_clock") > clock_resumed)
+
+	# —— ⑨ 穿梭块：手上 delta 把它整块推到 B，锚跟着瞬移（插座跟着块走）。 ——
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	walker.global_position = Vector2(1650.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	shuttle.period = 0.5
+	shuttle.duty = 0.5
+	shuttle.phase = 0.0
+	shuttle.set("_clock", 0.0)
+	shuttle._refresh_state(shuttle.cycle_on())
+	await _frame(1)
+	_check("前提：穿梭块停在 A 点", shuttle.is_on()
+		and shuttle.global_position.distance_to(Vector2(1800.0, -18.0)) < 0.01)
+	_check("对准穿梭块出膛", anchor.fire_toward(Vector2.RIGHT))
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.ATTACHED and guard < 60:
+		guard += 1
+		await _frame(1)
+	_check("吸附在穿梭块上", anchor.current_state() == TimeAnchor.State.ATTACHED
+		and anchor.attached_target() == shuttle)
+	Input.action_press(&"move_right")
+	guard = 0
+	while shuttle.is_on() and guard < 40:
+		guard += 1
+		await _frame(1)
+	_check("按着方向键：窗口走完即整块瞬移到 B，锚还吸着它",
+		not shuttle.is_on() and anchor.current_state() == TimeAnchor.State.ATTACHED
+		and shuttle.global_position.distance_to(Vector2(1800.0, -82.0)) < 0.01)
+	# 锚比块早进树，`_tick_attached` 读的是块**上一拍**的位置 —— 隔一拍再读插座。
+	await _frame(2)
+	_check("锚插在块上：跟着瞬移到 B 那一格（不是留在半空）",
+		anchor.global_position.distance_to(
+			shuttle.global_position + Vector2(-24.0, 0.0)) < 1.0)
+	Input.action_release(&"move_right")
+	guard = 0
+	while TimeManager.get_physics_delta() <= 0.0 and guard < 30:
+		guard += 1
+		await _frame(1)
+	var shuttle_clock_attached: float = shuttle.get("_clock")
+	await _frame(6)
+	_check("世界流着、人站着：锚着的穿梭块照停（跟手不跟世界钟）",
+		shuttle.get("_clock") == shuttle_clock_attached)
+	Input.action_press(&"interact")
+	await _frame(3)
+	Input.action_release(&"interact")
+	_check("回收后不再吸在穿梭块上", not anchor.has_link())
+	var shuttle_clock_free: float = shuttle.get("_clock")
+	await _frame(8)
+	_check("回收后穿梭块回世界钟，接着自己跳", shuttle.get("_clock") > shuttle_clock_free)
+
+	# —— ⑩ 占位查询（玩家）：人站在桥面要落地的那一小段下面，器件就停在旧状态。 ——
+	guard = 0
+	while anchor.current_state() != TimeAnchor.State.IDLE and guard < 60:
+		guard += 1
+		await _frame(1)
+	_phase_force(panel, false)
+	await _frame(2)
+	# 底座两侧各有一截 32 px 宽的桥面悬在离地 10 px 的地方：人站在悬空段下面
+	# （x 1250..1270）不与底座（1284..1316）重叠，但占着桥面的目标位置。
+	walker.global_position = Vector2(1260.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+	_phase_force(panel, true)
+	await _frame(2)
+	_check("玩家占着桥面：停成虚体、报 blocked（不把人挤开）",
+		not panel.is_on() and panel.is_blocked())
+	walker.global_position = Vector2(1000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(4)
+	_check("人让开：下一拍就变实（占位查询每帧重问）",
+		panel.is_on() and not panel.is_blocked())
+
+	# —— ⑪ 占位查询（层 4）：另一件 time_solid 占着也算占 —— 两块实体不叠在同一格。 ——
+	_phase_force(panel, false)
+	await _frame(2)
+	var blocker := _solid_box(Vector2(1300.0, -18.0), Vector2(40.0, 12.0))
+	blocker.collision_layer = 4
+	await _frame(1)
+	_phase_force(panel, true)
+	await _frame(2)
+	_check("层 4 的实体占着桥面：同样停在虚体",
+		not panel.is_on() and panel.is_blocked())
+	blocker.queue_free()
+	await _frame(4)
+	_check("实体让开：面板接着变实", panel.is_on() and not panel.is_blocked())
+
+	# —— ⑫ 相切不算占：人站在底座上（脚底与桥面上沿同高），内缩 1 px 让平台敢变实。 ——
+	_phase_force(panel, false)
+	await _frame(2)
+	walker.global_position = Vector2(1300.0, -41.0)
+	await _frame(3)
+	_check("前提：人站在底座上（脚底与桥面上沿相切）",
+		absf(walker.global_position.y - (-41.0)) < 0.5)
+	_phase_force(panel, true)
+	await _frame(2)
+	_check("相切不算占：脚底贴着桥面时照常变实",
+		panel.is_on() and not panel.is_blocked())
+	walker.global_position = Vector2(1000.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(3)
+
+	# —— ⑬ 穿梭块的占位查询走的是「目标那一头的 transform」：人站在 A 点，块回不去。 ——
+	_solid_box(Vector2(2600.0, 166.0), Vector2(120.0, 400.0))
+	var blocked_shuttle = _phase_instance(PHASE_SHUTTLE_SCENE, "ShuttleBlocked",
+		Vector2(2600.0, -42.0), 0.5, 0.5, 0.0, Vector2(0.0, -48.0))
+	await _frame(2)
+	_phase_force(blocked_shuttle, false)
+	await _frame(2)
+	_check("前提：那块先停在 B（空中那一格）", not blocked_shuttle.is_on()
+		and blocked_shuttle.global_position.distance_to(Vector2(2600.0, -90.0)) < 0.01)
+	walker.global_position = Vector2(2600.0, -49.0)
+	await _frame(3)
+	_phase_force(blocked_shuttle, true)
+	await _frame(3)
+	_check("人站在 A 点：穿梭块停在 B（不把人挤开、也不叠进去）",
+		not blocked_shuttle.is_on() and blocked_shuttle.is_blocked()
+		and blocked_shuttle.global_position.distance_to(Vector2(2600.0, -90.0)) < 0.01)
+	walker.global_position = Vector2(2400.0, -Player.COLLISION_HALF_HEIGHT)
+	await _frame(4)
+	_check("人一让开：下一拍回到 A（每帧重问，不是一次性）",
+		blocked_shuttle.is_on()
+		and blocked_shuttle.global_position.distance_to(Vector2(2600.0, -42.0)) < 0.01)
+
+	# —— ⑭ period / duty 两个极端（文档里写明的合法配置，别让它们变成"永远不开"）。 ——
+	_phase_force(panel, false)
+	await _frame(1)
+	panel.period = 0.0
+	panel.phase = 0.0
+	panel.duty = 0.0
+	panel._refresh_state(panel.cycle_on())
+	await _frame(1)
+	_check("period = 0：不看相位，恒开", panel.cycle_on() and panel.is_on())
+	panel.period = 0.5
+	panel.duty = 0.0
+	panel._refresh_state(panel.cycle_on())
+	await _frame(1)
+	_check("duty = 0：恒关", not panel.cycle_on() and not panel.is_on())
+	panel.duty = 1.0
+	panel._refresh_state(panel.cycle_on())
+	await _frame(1)
+	_check("duty = 1：恒开", panel.cycle_on() and panel.is_on())
+
+	for node in [panel, shuttle, blocked_shuttle]:
+		node.queue_free()
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(2)
+	TimeManager.reset_state()
+
+
+## 相位器件 fixture：`period/duty/phase` 必须在进树前赋好 —— `_ready()` 里那次
+## `_apply_state(cycle_on())` 就是按这一档决定开局站在哪一头。
+func _phase_instance(path: String, node_name: String, at: Vector2,
+		period: float, duty: float, phase: float, offset = null):
+	var device = load(path).instantiate()
+	device.name = node_name
+	device.position = at
+	device.period = period
+	device.duty = duty
+	device.phase = phase
+	if offset != null:
+		device.offset = offset
+	add_child(device)
+	return device
+
+
+## 把器件钉在某一态：`duty` 1/0 是文档里写明的两个极端，正好在这里当夹具有用。
+## 同一拍生效，不等下一帧 —— 否则"没走表"会被测成"还没轮到"。
+func _phase_force(device: Node, on: bool) -> void:
+	device.set("duty", 1.0 if on else 0.0)
+	device.set("_clock", 0.0)
+	device._refresh_state(device.cycle_on())
 
 
 ## 坠落带 fixture：导出项在进树前赋好，`_ready()` 里的 `_rebuild()` 才按这一档建盒## （与 D47 那台同一套时序口径）。宽度给窄一档，免得本组的三张网互相叠到别人身上。
