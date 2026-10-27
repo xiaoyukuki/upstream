@@ -112,13 +112,17 @@ STYLES = {
         motif_bg="quilt", motif_terrain="dot", soft=True,
         # decor_set / pickup 是 D70 那两条：装饰从「实验室词汇」换成「树丛词汇」
         # （几何与占格一格不动，只换 painters 表），并把可拾取琥珀从 accent2 里单拎出来跟着卡走。
+        # D72 整条 ×0.80（他挑的 B 档）：这套原样均值 205，冻结那层 CRT 的 linear_fac 1.3 一乘，
+        # 45.7% 的像素至少一个通道撞天花板 —— 亮底不是暗底取反，它没有余量给"加辉"。
+        # 唯一不动的是 pickup：它跟着 key_card.png 那张实物零件走（同色才说得出「这张开这扇」），
+        # 换风格不能把语义一起换掉（D70 第 4 条同一个道理）。
         decor_set="grove", pickup=PICKUP_AMBER,
-        bg=(236, 227, 240), bg2=(214, 203, 222), bg3=(192, 180, 202),
-        surface=(168, 210, 190), grout=(140, 186, 164), deep=(112, 156, 136),
-        lip=(252, 252, 250), lip_shade=(212, 236, 222), edge=(56, 44, 62),
-        accent=(96, 196, 214), accent2=(240, 132, 158),
-        glass=(210, 238, 244), metal=(186, 176, 202), screen=(46, 38, 58),
-        pit_shade=(46, 34, 60, 150),
+        bg=(189, 182, 192), bg2=(171, 162, 178), bg3=(154, 144, 162),
+        surface=(134, 168, 152), grout=(112, 149, 131), deep=(90, 125, 109),
+        lip=(202, 202, 200), lip_shade=(170, 189, 178), edge=(45, 35, 50),
+        accent=(77, 157, 171), accent2=(192, 106, 126),
+        glass=(168, 190, 195), metal=(149, 141, 162), screen=(37, 30, 46),
+        pit_shade=(37, 27, 48, 150),
     ),
     "e": dict(
         label="E  TOY PLAYROOM  (round subway wall + honey wood floor, brown outline)",
