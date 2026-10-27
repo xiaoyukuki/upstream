@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://bnid6f1pgnj6t"]
+
+[ext_resource type="AudioStream" uid="uid://10y3dsbjn7pj" path="res://assets/music/Building Time.mp3" id="1_chd06"]
+
+[node name="Musicplayer" type="AudioStreamPlayer" unique_id=2095757027]
+stream = ExtResource("1_chd06")
+autoplay = true

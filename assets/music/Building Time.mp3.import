@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://10y3dsbjn7pj"
+path="res://.godot/imported/Building Time.mp3-a736f1a2fc6572c7b5b3b0f6f1b8d256.mp3str"
+
+[deps]
+
+source_file="res://assets/music/Building Time.mp3"
+dest_files=["res://.godot/imported/Building Time.mp3-a736f1a2fc6572c7b5b3b0f6f1b8d256.mp3str"]
+
+[params]
+
+loop=true
+loop_offset=0.0
+bpm=0.0
+beat_count=0
+bar_beats=4
