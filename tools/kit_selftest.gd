@@ -81,6 +81,11 @@ extends Node
 ##     不动且世界时钟本身也没涨（连 `_shown` 也不漂）、解冻后接着推且不漂。另钉皮两条：
 ##     推一格就换图、推满一圈回到同一张（1536 格与落盘瓦片逐格比色那半边在 verify_kit，
 ##     只有它读得到纹理），以及 `beat_period=0` 时世界在流也钉在相位 0。
+## 25) 假墙盖（D76）：第三件零契约表现件，时基却与前两件**相反** —— 它不许读世界钟（横按方向键
+##     即冻世界，照时钟揭幕会在人正朝它走的时候停住）。这一组在真帧上钉六条：开局人就在屋里 →
+##     第一拍就是全隐（不是先亮一下再淡）；远/中/近三档按 near/far 落位；同一站位世界流着 20 拍
+##     不动（位置纯函数）；世界冻着也一样；人走进自家格子中间那一下不许被重新盖住；场上没有
+##     玩家时盖回全挡。静态那一半（z 层 / 碰撞开关 / 逐格实心格 / 源码禁令）在 verify_kit。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -287,6 +292,7 @@ func _ready() -> void:
 	await _test_time_anchor()
 	await _test_phase_devices()
 	await _test_ecg_monitor()
+	await _test_cave_cover()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -2761,6 +2767,183 @@ func _test_ecg_monitor() -> void:
 	_check("beat_period=0：世界在流，相位仍钉在 0（%d）" % monitor.phase(), monitor.phase() == 0)
 
 	monitor.queue_free()
+	await _frame(2)
+	TimeManager.reset_state()
+
+
+## 第 25 组：假墙盖（D76）。三档距离显式给 32 / 96，不跟脚本默认的 48 / 160 走 ——
+## 默认值归摆图的人随时调，照它断言"站在 N px 处该是多少"第二天就会红（D58 同一个坑）。
+## 盖子的格子照清单里 mask 四边全满那格刷，不写死 (3,3)：换图集只换坐标不换这条判据。
+func _test_cave_cover() -> void:
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(2)
+
+	const AT := Vector2(6000.0, -900.0)
+	var manifest: Dictionary = JSON.parse_string(
+		FileAccess.get_file_as_string("res://assets/tiles/tiles.json"))
+	var ts: TileSet = load("res://assets/tiles/lab_tileset.tres")
+	var bits: Dictionary = manifest["terrain"]["mask_bits"]
+	var full := 0
+	for key in bits:
+		full |= int(bits[key])
+	var solid := Vector2i(-1, -1)
+	for entry in manifest["terrain"]["tiles"]:
+		if int(entry["mask"]) == full:
+			solid = Vector2i(int(entry["x"]) / int(manifest["tile"]),
+				int(entry["y"]) / int(manifest["tile"]))
+	var cell := Vector2(ts.tile_size)
+	var rect := Rect2(AT, cell * Vector2(3, 2))
+	var mouth := AT + Vector2(-cell.x, cell.y)
+
+	# 先把人放进屋里再挂盖子：验的是"开局第一拍就全隐"，不是先亮一下再淡下去。
+	# `set_physics_process(false)` 必须在**进树之后**调：进树前调的那一档在 _ready 时被
+	# 重新登记掉（实测 phys=true，人当场往下掉 60 px，alpha 从 0.5 漂到 0.88）。
+	var hero := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	hero.global_position = rect.get_center() + Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	add_child(hero)
+	hero.set_physics_process(false)
+
+	var cover := load("res://scenes/objects/cave_cover/cave_cover.tscn").instantiate() as CaveCover
+	cover.tile_set = ts
+	cover.position = AT
+	for x in 3:
+		for y in 2:
+			cover.set_cell(Vector2i(x, y), 0, solid)
+	var marker := Marker2D.new()
+	marker.name = "Mouth"
+	marker.position = Vector2(-cell.x, cell.y)
+	cover.add_child(marker)
+	cover.reveal_near = 32.0
+	cover.reveal_far = 96.0
+	add_child(cover)
+	await _frame(2)
+	_check("开局人就在屋里：第一拍就是全隐（a=%s）" % str(cover.current_alpha()),
+		cover.current_alpha() == 0.0)
+	_check("单块也会拆进 Patch1 并清空根层（patch_count=%d，根上剩 %d 格）"
+		% [cover.patch_count(), cover.get_used_cells().size()],
+		cover.patch_count() == 1 and cover.get_used_cells().is_empty())
+
+	hero.global_position = mouth + Vector2(300.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("站到 reveal_far 之外：全挡（a=%.2f）" % cover.current_alpha(),
+		cover.current_alpha() == 1.0)
+
+	hero.global_position = mouth + Vector2(-64.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	var want_mid: float = (64.0 - cover.reveal_near) / (cover.reveal_far - cover.reveal_near)
+	_check("站在 near/far 正中：半透（a=%.3f，按两档应为 %.3f）"
+		% [cover.current_alpha(), want_mid], absf(cover.current_alpha() - want_mid) < 0.005)
+	await _frame(20)
+	_check("同一站位世界流着 20 拍：不透明度一字不动（位置纯函数，不读时钟）",
+		absf(cover.current_alpha() - want_mid) < 0.005)
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("前提：有移动意图即世界冻结", TimeManager.is_time_frozen())
+	var t0: float = TimeManager.elapsed_world_time
+	await _frame(20)
+	_check("世界冻着 20 拍：不透明度仍不动，时钟也确实没涨（a=%.3f，钟 %s）"
+		% [cover.current_alpha(), str(TimeManager.elapsed_world_time == t0)],
+		absf(cover.current_alpha() - want_mid) < 0.005 and TimeManager.elapsed_world_time == t0)
+	TimeManager.notify_movement_intent(false)
+
+	hero.global_position = mouth + Vector2(-10.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("走到洞口跟前（< reveal_near）：整块隐去（a=%.2f）" % cover.current_alpha(),
+		cover.current_alpha() == 0.0)
+
+	# 走进屋最里面：把洞口挪到 392 px 外。按距离算这会儿该全挡，站进自家格子必须仍全隐。
+	marker.position = Vector2(400.0, cell.y)
+	hero.global_position = rect.position + Vector2(cell.x * 0.5, cell.y) \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("人在屋里、洞口在 392 px 外：仍全隐（走到底不许被重新盖住）",
+		cover.current_alpha() == 0.0)
+	marker.position = Vector2(-cell.x, cell.y)
+
+	hero.queue_free()
+	await _frame(3)
+	_check("场上没有玩家：盖回全挡（a=%.2f）" % cover.current_alpha(),
+		cover.current_alpha() == 1.0)
+
+	cover.queue_free()
+	await _frame(2)
+
+	# —— 多块（2026-10-28 订正）：一个节点里刷两块互不相连的盖子 ——
+	# 老实现拿**全部格子的外接框**判"站进屋里"、拿**一个 Mouth** 判远近，而 `modulate` 是
+	# 节点级的：站在两块之间（在外接框里、不在任何一块上）会让整片一起透明，靠近 A 的口子
+	# 也会顺带把 B 变淡。这里钉的是"每块自己判自己"。
+	const AT2 := Vector2(6600.0, -900.0)
+	var hero2 := load("res://scenes/actors/player/player.tscn").instantiate() as Player
+	add_child(hero2)
+	hero2.set_physics_process(false)
+	var cover2 := load("res://scenes/objects/cave_cover/cave_cover.tscn").instantiate() as CaveCover
+	cover2.tile_set = ts
+	cover2.position = AT2
+	for at in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1),
+			Vector2i(6, 0), Vector2i(7, 0), Vector2i(6, 1), Vector2i(7, 1)]:
+		cover2.set_cell(at, 0, solid)
+	var mouth_a := Marker2D.new()
+	mouth_a.name = "Mouth"
+	mouth_a.position = Vector2(-cell.x, cell.y)
+	cover2.add_child(mouth_a)
+	var mouth_b := Marker2D.new()
+	mouth_b.name = "Mouth2"
+	mouth_b.position = Vector2(cell.x * 9.0, cell.y)
+	cover2.add_child(mouth_b)
+	cover2.reveal_near = 16.0
+	cover2.reveal_far = 32.0
+	add_child(cover2)
+	await _frame(2)
+
+	_check("多块：两坨不相连的格子拆成 2 块（patch_count=%d）" % cover2.patch_count(),
+		cover2.patch_count() == 2)
+	_check("多块：根层拆完清空（剩 %d 格）、alpha 还回 1（子层会继承父级，拆前那一拍可能写过 0）"
+		% cover2.get_used_cells().size(),
+		cover2.get_used_cells().is_empty() and is_equal_approx(cover2.modulate.a, 1.0))
+	var all_off := true
+	for layer in cover2.all_patches():
+		all_off = all_off and not (layer as TileMapLayer).collision_enabled
+	_check("多块：拆出来的子层都不带碰撞（带碰撞就是两面看不见的墙）", all_off)
+
+	# 归属：A 的 Mouth 在左、B 的 Mouth2 在右，两个口子各归各的块。
+	_check("多块：Mouth 归给左边那块（%s）" % str(cover2.mouth_point(0)),
+		cover2.mouth_point(0).distance_to(AT2 + Vector2(-cell.x, cell.y)) < 0.01)
+	_check("多块：Mouth2 归给右边那块（%s）" % str(cover2.mouth_point(1)),
+		cover2.mouth_point(1).distance_to(AT2 + Vector2(cell.x * 9.0, cell.y)) < 0.01)
+
+	# 站到两块之间：在外接框里、不在任何一块上，离两个口子都 80 px —— 两块都该全挡。
+	# 老实现的外接框判"里面"，这一拍整片会一起变透明。
+	hero2.global_position = AT2 + Vector2(cell.x * 4.0, cell.y) \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("多块：站在两块之间，A 全挡（a=%.2f）" % cover2.current_alpha(0),
+		cover2.current_alpha(0) == 1.0)
+	_check("多块：站在两块之间，B 全挡（a=%.2f）—— 老实现这里整片全隐" % cover2.current_alpha(1),
+		cover2.current_alpha(1) == 1.0)
+
+	# 靠近 A 的口子：只有 A 露，B 仍全挡（老实现里两块的 alpha 是同一个数）。
+	hero2.global_position = mouth_a.global_position \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("多块：站 A 口前，A 全隐（a=%.2f）" % cover2.current_alpha(0),
+		cover2.current_alpha(0) == 0.0)
+	_check("多块：站 A 口前，B 仍全挡（a=%.2f）—— 不许被邻居顺带打开" % cover2.current_alpha(1),
+		cover2.current_alpha(1) == 1.0)
+
+	# 站进 B 里：B 全隐，A 全挡（"站进自家格子"也按块算，不是整片外接框）。
+	hero2.global_position = AT2 + Vector2(cell.x * 6.5, cell.y) \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(2)
+	_check("多块：站进 B 里，B 全隐（a=%.2f）" % cover2.current_alpha(1),
+		cover2.current_alpha(1) == 0.0)
+	_check("多块：站进 B 里，A 全挡（a=%.2f）" % cover2.current_alpha(0),
+		cover2.current_alpha(0) == 1.0)
+
+	hero2.queue_free()
+	cover2.queue_free()
 	await _frame(2)
 	TimeManager.reset_state()
 

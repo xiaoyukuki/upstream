@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/objects/cave_cover/cave_cover.gd" id="1"]
+
+[node name="CaveCover" type="TileMapLayer"]
+z_index = 1
+collision_enabled = false
+script = ExtResource("1")

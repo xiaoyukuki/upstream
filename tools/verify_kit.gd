@@ -21,6 +21,7 @@ const SCRIPTS := [
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://scenes/objects/clock/clock.gd",
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd",
+	"res://scenes/objects/cave_cover/cave_cover.gd",
 	"res://components/clock_device.gd",
 	"res://scenes/objects/phase_panel/phase_panel.gd",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
@@ -80,6 +81,7 @@ const SCENES := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.tscn",
 	"res://scenes/objects/fall_zone/fall_zone.tscn",
 	"res://scenes/objects/clock/clock.tscn",
+	"res://scenes/objects/cave_cover/cave_cover.tscn",
 	"res://scenes/objects/phase_panel/phase_panel.tscn",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
@@ -111,6 +113,7 @@ const EXPORTS := {
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/objects/clock/clock.gd": ["period"],
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd": ["beat_period"],
+	"res://scenes/objects/cave_cover/cave_cover.gd": ["reveal_near", "reveal_far"],
 	"res://components/clock_device.gd": ["period", "duty", "phase"],
 	"res://scenes/objects/phase_panel/phase_panel.gd": ["panel_size"],
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd": ["step_size", "offset"],
@@ -149,6 +152,10 @@ const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
 const CLOCK_SCRIPT := "res://scenes/objects/clock/clock.gd"
 const ECG_SCRIPT := "res://scenes/objects/ecg_monitor/ecg_monitor.gd"
 const ECG_SCENE := "res://scenes/objects/ecg_monitor/ecg_monitor.tscn"
+const CAVE_COVER_SCRIPT := "res://scenes/objects/cave_cover/cave_cover.gd"
+const CAVE_COVER_SCENE := "res://scenes/objects/cave_cover/cave_cover.tscn"
+## 盖子逐格核的是"实心格"，那份坐标来自 tiles.json；合成用的空层也挂这一份图集。
+const LAB_TILESET := "res://assets/tiles/lab_tileset.tres"
 const TILES_MANIFEST := "res://assets/tiles/tiles.json"
 const TIME_ANCHOR_SCRIPT := "res://scenes/actors/player/time_anchor.gd"
 const MOVING_BLOCK_SCENE := "res://scenes/objects/moving_block/moving_block.tscn"
@@ -175,6 +182,8 @@ var _pistons_checked: int = 0
 var _fallzones_checked: int = 0
 ## 锚点族（D68）：扫到几块挂了 anchorable 的实体。扫描空转比漏检更糟，所以设了下限。
 var _anchorables_checked: int = 0
+## 假墙盖（D76）：现在还没有关卡摆过，所以只记账不设门槛。
+var _covers_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -239,6 +248,7 @@ func _initialize() -> void:
 		_fallzones_checked += _count_by_script(level, FALLZONE_SCRIPT)
 		_check_level_hazards(level, path)
 		_check_key_wiring(level, path)
+		_check_cave_covers(level, path)
 		level.free()
 
 
@@ -253,14 +263,16 @@ func _process(_delta: float) -> bool:
 	_verify_fall_zone()
 	_verify_clock()
 	_verify_ecg_monitor()
+	_verify_cave_cover()
 	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
-	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d failures=%d"
-		% [_doors_checked, _pistons_checked, _fallzones_checked, _anchorables_checked, _failures])
+	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d covers=%d failures=%d"
+		% [_doors_checked, _pistons_checked, _fallzones_checked, _anchorables_checked,
+			_covers_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -890,6 +902,233 @@ func _verify_ecg_monitor() -> void:
 	ecg.free()
 
 
+## D76 假墙盖：第三件零契约表现件，时基却与钟/屏那两件**相反** —— 前两件钉"只读世界钟"，
+## 这一件钉"不读世界钟"：本作横按方向键即冻世界，照时钟揭幕会在玩家正朝它走的时候停住。
+## 静态这一遍钉的是那几类"改了不响"的东西：
+## ① 时基只有位置：源码里出现 `elapsed_world_time` / `TimeReceiver` / `_process` 就是换了时基；
+## ② 零契约：不发 signal、不认 run_state；
+## ③ 层的两把开关：z_index 必须压过 z=0（墙/玩家/屋里摆的东西），collision_enabled 必须关
+##    （它画的是带碰撞多边形的实心格，不关就是一面看不见的墙）；
+## ④ 距离三档 + 两条边界：站进自己的格子里一律 0（只按到洞口的距离算，走进屋走到底会被
+##    重新盖住 —— 这条只在"走到最里面"才露馅）；far <= near 时不许出 NaN；
+## ⑤ 逐格核"盖的必须是墙的实心格"（坐标从 tiles.json 里 mask 全满那格来，不写死），
+##    并当场跑两条对照：刷对的一层必须**没有**问题、错一格必须**报**问题 —— 否则这条
+##    本身就是假绿。
+func _verify_cave_cover() -> void:
+	var src := _code_only(FileAccess.get_file_as_string(CAVE_COVER_SCRIPT))
+	if src.is_empty():
+		_fail("读不到 %s" % CAVE_COVER_SCRIPT)
+		return
+	for banned in ["elapsed_world_time", "TimeReceiver", "run_state", "\nsignal "]:
+		if src.contains(banned):
+			_fail("CaveCover 里出现了 %s：它是位置纯表现件，不许换时基，也不许有契约面（D76）" % banned)
+	if src.contains("func _process("):
+		_fail("CaveCover 里出现了 _process：不透明度只走物理通道（D76 同 D69）")
+	if not src.contains("func _physics_process("):
+		_fail("CaveCover 没有 _physics_process：它不会自己更新，盖子永远停在出厂值（D76）")
+
+	var cover = _enter(CAVE_COVER_SCENE)
+	if cover.get_class() != "TileMapLayer":
+		_fail("CaveCover 的根是 %s，不是 TileMapLayer（D76）" % cover.get_class())
+	if cover.z_index != 1:
+		_fail("cave_cover.tscn 的 z_index=%d（应为 1：要压过 z=0 的墙、玩家与屋里摆的东西）"
+			% cover.z_index)
+	if cover.collision_enabled:
+		_fail("cave_cover.tscn 开着碰撞：它画的是带碰撞多边形的实心格，玩家会撞在看不见的墙上（D76）")
+	if not cover.get_used_cells().is_empty():
+		_fail("cave_cover.tscn 自带 %d 格：出厂必须是空层，格子归作者刷（D76）"
+			% cover.get_used_cells().size())
+
+	var manifest := _tiles_manifest()
+	var solid := _solid_atlas_coords(manifest)
+	if solid.x < 0:
+		_fail("tiles.json 里找不到 mask 全满的那一格，逐格核没法做（D76）")
+		root.remove_child(cover)
+		cover.free()
+		return
+
+	# 合成 3×2 格的一间"暗室"，全部刷成实心格。
+	cover.tile_set = load(LAB_TILESET)
+	cover.global_position = Vector2(2000.0, -600.0)
+	for x in 3:
+		for y in 2:
+			cover.set_cell(Vector2i(x, y), 0, solid)
+	cover.reveal_near = 32.0
+	cover.reveal_far = 96.0
+	var cell := Vector2(cover.tile_set.tile_size)
+	var want_rect := Rect2(Vector2(2000.0, -600.0), cell * Vector2(3, 2))
+	var rect: Rect2 = cover.reveal_rect()
+	if rect.position.distance_to(want_rect.position) > 0.01 or rect.size != want_rect.size:
+		_fail("reveal_rect()=%s，3×2 格应得 %s：包围盒算错，站进屋里那条规则会跟着失准（D76）"
+			% [str(rect), str(want_rect)])
+	if cover.mouth_point().distance_to(rect.get_center()) > 0.01:
+		_fail("没有 Mouth 时 mouth_point() 没退回包围盒中心：%s 对 %s（D76）"
+			% [str(cover.mouth_point()), str(rect.get_center())])
+
+	# 洞口放到左外侧一格：于是包围盒中心离它 40 px，落在 near/far 中间。
+	var mouth := Marker2D.new()
+	mouth.name = "Mouth"
+	cover.add_child(mouth)
+	mouth.global_position = rect.position + Vector2(-cell.x, cell.y)
+	var mouth_at: Vector2 = mouth.global_position
+	if cover.mouth_point().distance_to(mouth_at) > 0.01:
+		_fail("放了 Mouth 之后 mouth_point() 没用那个点：%s 对 %s（D76）"
+			% [str(cover.mouth_point()), str(mouth_at)])
+	if cover.alpha_for(mouth_at + Vector2(cover.reveal_far + 100.0, 0.0)) != 1.0:
+		_fail("远于 reveal_far 的位置 alpha=%s（应为 1）：盖不住（D76）"
+			% str(cover.alpha_for(mouth_at + Vector2(cover.reveal_far + 100.0, 0.0))))
+	if cover.alpha_for(mouth_at + Vector2(cover.reveal_near * 0.5, 0.0)) != 0.0:
+		_fail("近于 reveal_near 的位置 alpha=%s（应为 0）：露不出来（D76）"
+			% str(cover.alpha_for(mouth_at + Vector2(cover.reveal_near * 0.5, 0.0))))
+	var mid_d: float = (cover.reveal_near + cover.reveal_far) * 0.5
+	var got: float = cover.alpha_for(mouth_at + Vector2(mid_d, 0.0))
+	var want_mid: float = (mid_d - cover.reveal_near) / (cover.reveal_far - cover.reveal_near)
+	if absf(got - want_mid) > 0.0001:
+		_fail("中间档不是线性的：%s px 处得到 %.3f，按 near/far 重算应为 %.3f（D76）"
+			% [str(mid_d), got, want_mid])
+	# 包围盒中心离洞口 40 px（near/far 之间，不在屋里的算法会给 0.125）。
+	if cover.alpha_for(rect.get_center()) != 0.0:
+		_fail("玩家中心落在盖子自己的格子里时 alpha=%.3f（应为 0）：走进屋走到底会被重新盖住（D76）"
+			% cover.alpha_for(rect.get_center()))
+	cover.reveal_near = 50.0
+	cover.reveal_far = 10.0
+	var degenerate: float = cover.alpha_for(mouth_at + Vector2(-60.0, 0.0))
+	if degenerate != 1.0:
+		_fail("reveal_far <= reveal_near 时 alpha_for 给了 %s（应为 1，且不许是 NaN）（D76）"
+			% str(degenerate))
+	cover.reveal_near = 32.0
+	cover.reveal_far = 96.0
+
+	# —— 逐格核：正对照 + 两条负对照 ——
+	var problems := _cover_cell_problems(cover)
+	if not problems.is_empty():
+		_fail("刷对实心格的盖子被逐格核判红：%s（D76 假红）" % problems[0])
+	var full := _full_mask(manifest)
+	var wrong := Vector2i(-1, -1)
+	for entry in manifest["terrain"]["tiles"]:
+		if int(entry["mask"]) != full:
+			wrong = Vector2i(int(entry["x"]) / int(manifest["tile"]),
+				int(entry["y"]) / int(manifest["tile"]))
+			break
+	if wrong.x < 0:
+		_fail("tiles.json 里找不到非实心格，逐格核的负对照造不出来（D76）")
+	else:
+		cover.set_cell(Vector2i(2, 1), 0, wrong)
+		if _cover_cell_problems(cover).is_empty():
+			_fail("逐格核对一格错瓦片（%s）没报红：这条「每格都得是实心格」是假绿（D76）"
+				% str(wrong))
+		cover.set_cell(Vector2i(2, 1), 0, solid)
+	var empty = load(CAVE_COVER_SCENE).instantiate()
+	root.add_child(empty)
+	empty.tile_set = load(LAB_TILESET)
+	if _cover_cell_problems(empty).is_empty():
+		_fail("逐格核对一格没刷的盖子没报红：摆上去等于没盖（D76）")
+	root.remove_child(empty)
+	empty.free()
+
+	# 运行态正面控制（D76 订正 2026-10-28）：进树前刷好格子的盖子会在 _ready 里拆进
+	# `Patch1…` 子层、根层清空。逐格核只看根层的话，这一种会被误判成"一格都没刷" ——
+	# 所以这里真造一个拆过的，先证明它确实拆了，再证明逐格核扫得到。扫关那一步是
+	# `free()` 掉不进树的实例，走不到这条路径，只能在这里钉。
+	var split_cover = load(CAVE_COVER_SCENE).instantiate()
+	split_cover.tile_set = load(LAB_TILESET)
+	for x in 2:
+		for y in 2:
+			split_cover.set_cell(Vector2i(x, y), 0, solid)
+	root.add_child(split_cover)
+	if split_cover.patch_count() != 1 or not split_cover.get_used_cells().is_empty():
+		_fail("进树后没拆成 Patch1（patch_count=%d，根上剩 %d 格）：下面这条正面控制是空转的"
+			% [split_cover.patch_count(), split_cover.get_used_cells().size()])
+	var split_problems := _cover_cell_problems(split_cover)
+	if not split_problems.is_empty():
+		_fail("拆过的盖子被逐格核判红（根层已清空，格子都在子层）：%s（D76 订正）"
+			% split_problems[0])
+	root.remove_child(split_cover)
+	split_cover.free()
+
+	root.remove_child(cover)
+	cover.free()
+
+
+## 盖子逐格核（D76）：它盖的必须是**这面墙本来会长成的那一格** —— mask 四边全满的实心格。
+## 用背景 `WallFill` 那格（atlas (0,2)）或任意边缘格都会在接缝处露馅：那是一套另一个材质
+## （实测与实心格逐字节差 768/1024），而盖子的全部价值就是"接缝看不出来"。
+## 多块（2026-10-28）：运行中的盖子会把格子搬进 `Patch1…` 子层（每块独立判定），根层随即
+## 被清空 —— 所以这里按 `all_patches()` 汇总扫，只看根层会把一块正常的盖子判成"一格都没刷"。
+func _cover_cell_problems(cover: TileMapLayer) -> PackedStringArray:
+	var out := PackedStringArray()
+	if cover.tile_set == null:
+		out.append("没挂 tile_set：空层读不出材质，也没法确认它盖的是这面墙")
+		return out
+	var layers: Array = [cover]
+	if cover.has_method(&"all_patches"):
+		var patches: Array = cover.call(&"all_patches")
+		if not patches.is_empty():
+			layers = patches
+	var solid := _solid_atlas_coords(_tiles_manifest())
+	if solid.x < 0:
+		out.append("tiles.json 里找不到实心格的坐标")
+		return out
+	var total := 0
+	var bad := 0
+	var first := Vector2i.ZERO
+	var first_src := -1
+	var first_atlas := Vector2i.ZERO
+	var first_alt := 0
+	for layer in layers:
+		var map := layer as TileMapLayer
+		if map == null or map.tile_set == null:
+			out.append("有一块 Patch 没挂 tile_set：那块读不出材质，画出来是空的")
+			continue
+		for cell in map.get_used_cells():
+			total += 1
+			var src := map.get_cell_source_id(cell)
+			var atlas := map.get_cell_atlas_coords(cell)
+			var alt := map.get_cell_alternative_tile(cell)
+			if src == 0 and atlas == solid and alt == 0:
+				continue
+			bad += 1
+			if bad == 1:
+				first = cell
+				first_src = src
+				first_atlas = atlas
+				first_alt = alt
+	if total == 0:
+		out.append("一格都没刷：它盖不住任何东西")
+		return out
+	if bad > 0:
+		out.append(("%d/%d 格不是墙的实心格（第一格 %s 是 src=%d atlas=%s alt=%d，"
+			+ "应为 src=0 atlas=%s alt=0）：接缝会露馅")
+			% [bad, total, str(first), first_src, str(first_atlas), first_alt, str(solid)])
+	return out
+
+
+func _tiles_manifest() -> Dictionary:
+	var m = JSON.parse_string(FileAccess.get_file_as_string(TILES_MANIFEST))
+	return m if m is Dictionary else {}
+
+
+func _full_mask(manifest: Dictionary) -> int:
+	if manifest.is_empty():
+		return -1
+	var bits: Dictionary = manifest["terrain"]["mask_bits"]
+	var full := 0
+	for key in bits:
+		full |= int(bits[key])
+	return full
+
+
+func _solid_atlas_coords(manifest: Dictionary) -> Vector2i:
+	if manifest.is_empty():
+		return Vector2i(-1, -1)
+	var tile: int = int(manifest["tile"])
+	var full := _full_mask(manifest)
+	for entry in manifest["terrain"]["tiles"]:
+		if int(entry["mask"]) == full:
+			return Vector2i(int(entry["x"]) / tile, int(entry["y"]) / tile)
+	return Vector2i(-1, -1)
+
+
 func _rgba(data: PackedByteArray, off: int) -> Array:
 	return [int(data[off]), int(data[off + 1]), int(data[off + 2]), int(data[off + 3])]
 
@@ -1322,6 +1561,33 @@ func _check_key_wiring(level: Node, path: String) -> void:
 			_fail("%s 的 %s 与 %s 共用一张卡（%s）：一扇消耗后另一扇永远闩不上"
 				% [path, card_users[target], node_path, target])
 		card_users[target] = node_path
+
+
+## 关卡里摆好的假墙盖（D76）：无头扫的是"摆上去到底盖不盖得住"那几件事 ——
+## 压在墙下面（z）、会撞人（碰撞开关）、刷错瓦片（逐格核），以及跟这关的墙面不是同一份
+## 图集（换风格后会盖出另一种砖，不报错、只是在接缝处露馅）。
+## 没有关卡摆过时只记账不设门槛：哪一关需要暗室是摆图的决定，不是每关都必须有。
+func _check_cave_covers(root: Node, path: String) -> void:
+	var by_path := {}
+	_collect_paths(root, "", by_path)
+	var wall := root.get_node_or_null("Terrain/Tiles") as TileMapLayer
+	for node_path in by_path:
+		var node: Node = by_path[node_path]
+		var script: Script = node.get_script()
+		if script == null or script.resource_path != CAVE_COVER_SCRIPT:
+			continue
+		_covers_checked += 1
+		var label := "%s 的 %s" % [path, node_path]
+		if node.z_index <= 0:
+			_fail("%s z_index=%d：压在 z=0 的墙、玩家与屋里摆的东西下面，盖不住任何东西（D76）"
+				% [label, node.z_index])
+		if node.collision_enabled:
+			_fail("%s 开着碰撞：它画的是带碰撞多边形的实心格，玩家会撞在看不见的墙上（D76）" % label)
+		for problem in _cover_cell_problems(node):
+			_fail("%s %s（D76）" % [label, problem])
+		if wall != null and node.tile_set != wall.tile_set:
+			_fail("%s 的 tile_set 与 %s 的 Terrain/Tiles 不是同一份：换风格后会盖出另一种砖（D76）"
+				% [label, path])
 
 
 ## D25 立绘零件：尺寸照 props.json，像素契约照「平铺必须自洽」那套思路 ——
