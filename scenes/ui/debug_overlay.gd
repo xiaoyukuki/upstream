@@ -65,7 +65,8 @@ func _build_report() -> String:
 	var state: String = "FROZEN" if TimeManager.is_time_frozen() else "FLOWING"
 	if TimeManager.is_releasing():
 		state += " (buffering)"
-	lines.append("TIME %s   ability=%s" % [state, str(TimeManager.is_ability_enabled)])
+	lines.append("TIME %s   ability=%s   anchor=%s" % [
+		state, str(TimeManager.is_ability_enabled), str(TimeManager.is_anchor_enabled)])
 	lines.append("world_time=%.3f   physics_frames=%d" % [
 		TimeManager.elapsed_world_time, Engine.get_physics_frames()])
 	lines.append("fps=%.1f   phys_d=%.5f   proc_d=%.5f   max_fps=%d" % [

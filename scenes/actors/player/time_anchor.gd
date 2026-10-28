@@ -7,10 +7,13 @@ extends Node2D
 ##   RETURNING 回程。不理会碰撞，直线追胸口，吃真实 delta；到手上回 IDLE。
 ##
 ## 时间源（D66①）只有一条式子：**锚点物跟的是玩家的动作，不是世界钟**。
-##   source 活着 && 没被移动锁掐住 && 能力已开 && 手上有方向
+##   source 活着 && 没被移动锁掐住 && 锚点能力已开 && 手上有方向
 ## 四条全真 → 真实物理/处理 delta；否则 → 0。刻意不读世界钟的全局账本、
 ## 不吃 0.08 s 的松手缓冲、不认死亡/授予那一拍的钉住 —— 那三道闸管的是世界，
 ## 而锚点物只听玩家的手。松手当帧就停：玩家看见的因果必须是一对一的。
+## 第三条那道闸读的是 `is_anchor_enabled`（D73）—— 锚点从此是**独立一项能力**，
+## 与"世界冻不冻"那一项互不蕴含：两项可以任意组合，只开锚点时世界照样流动，
+## 那时能测到的是"我按着它才走"，测不到"世界停了它还在走"那层对照。
 ##
 ## 回收（强回收）：一次只有一根锚。吸附中再按发射键什么也不发生；要换目标，
 ## 先 E 收回来。回收**当帧断链**，目标立刻回到世界钟（世界若冻着它就停）；
@@ -91,7 +94,7 @@ func _exit_tree() -> void:
 func _physics_process(delta: float) -> void:
 	if source == null:
 		return
-	if not TimeManager.is_ability_enabled:
+	if not TimeManager.is_anchor_enabled:
 		if _state != State.IDLE or _target != null:
 			reset_state()
 		else:
@@ -192,7 +195,7 @@ func _tick_returning(delta: float) -> void:
 func fire_toward(direction: Vector2) -> bool:
 	if _state != State.IDLE or source == null:
 		return false
-	if not TimeManager.is_ability_enabled or source.is_dead or source.movement_locked:
+	if not TimeManager.is_anchor_enabled or source.is_dead or source.movement_locked:
 		return false
 	var dir: Vector2 = direction
 	if dir.length_squared() < 0.000001:
@@ -294,7 +297,7 @@ func _pump_enabled() -> bool:
 	if _target == null or _receiver == null or not is_instance_valid(_target) \
 			or not is_instance_valid(_receiver):
 		return false
-	if not TimeManager.is_ability_enabled:
+	if not TimeManager.is_anchor_enabled:
 		return false
 	return source.input_handler.is_moving
 
@@ -373,7 +376,7 @@ func _clear_preview() -> void:
 
 
 func _draw() -> void:
-	if source == null or source.is_dead or not TimeManager.is_ability_enabled:
+	if source == null or source.is_dead or not TimeManager.is_anchor_enabled:
 		return
 	if _aiming:
 		_draw_aim()

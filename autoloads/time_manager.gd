@@ -13,6 +13,7 @@ extends Node
 
 signal state_changed(new_state: TimeState)
 signal ability_enabled_changed(enabled: bool)
+signal anchor_enabled_changed(enabled: bool)
 
 enum TimeState { FLOWING, FROZEN }
 
@@ -21,6 +22,10 @@ const RELEASE_BUFFER_DURATION: float = 0.08
 
 var current_state: TimeState = TimeState.FLOWING
 var is_ability_enabled: bool = false
+## 第二项能力：时间锚点（D73），与上面那条**互不蕴含**。分开的理由是两条规则听的不是同一件事 ——
+## `is_ability_enabled` 管"世界听不听玩家的腿"，锚点管"某一件东西反过来听玩家的腿"。
+## 测试期它没有授予路径（祭坛不写它、`run_state` 不记它），只有关卡根那个导出项写。
+var is_anchor_enabled: bool = false
 
 ## 强制冻结开关（D42）：死亡那一拍把世界钉在 FROZEN，与移动意图、与能力开没开都无关。
 var _frozen_override: bool = false
@@ -128,6 +133,15 @@ func set_ability_enabled(enabled: bool) -> void:
 	ability_enabled_changed.emit(enabled)
 	if not enabled:
 		reset_state()
+
+
+## 锚点能力那条独立开关（D73）。刻意**不**跟着关 `reset_state()` —— 这一项不拥有世界状态，
+## 关它只该让锚自己收摊，而那是 `TimeAnchor._physics_process()` 里那道闸在做的事。
+func set_anchor_enabled(enabled: bool) -> void:
+	if is_anchor_enabled == enabled:
+		return
+	is_anchor_enabled = enabled
+	anchor_enabled_changed.emit(enabled)
 
 
 ## 关卡级重置。清掉缓冲、能力门控残留、强制冻结残留与世界计时，

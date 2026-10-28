@@ -111,7 +111,7 @@ const EXPORTS := {
 	"res://components/clock_device.gd": ["period", "duty", "phase"],
 	"res://scenes/objects/phase_panel/phase_panel.gd": ["panel_size"],
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd": ["step_size", "offset"],
-	"res://scenes/levels/level_base.gd": ["start_with_ability", "camera_limits", "death_time"],
+	"res://scenes/levels/level_base.gd": ["start_with_ability", "start_with_anchor", "camera_limits", "death_time"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
 
@@ -934,8 +934,8 @@ func _verify_altar_save() -> void:
 ##    多一处书写点，就会出现"这条路径吸上了、那条路径没撒手"的半截链接；
 ## ② 那条式子不许读世界钟/全局缩放/存档 —— D66① 的锚点物跟的是玩家的手，
 ##    写成 `elapsed_world_time` 会看起来也在动，但世界一冻它就停，整条机制反了；
-## ③ 四个闸缺一不可（活着 / 没被移动锁掐 / 能力已开 / 手上在动），少一条就是
-##    "某种状态下它会自己走/自己停"，而画面不会报错；
+## ③ 四个闸缺一不可（活着 / 没被移动锁掐 / 锚点能力已开 / 手上在动），少一条就是
+##    "某种状态下它会自己走/自己停"，而画面不会报错；第三条自 D73 起读的是独立旗标；
 ## ④ 回执是 `_wound` 的纯函数且绝不回头喂时间源：没有 `_process`（照帧率卷），
 ##    `_pump_enabled()` 的函数体里不出现 `_wound`；调色板与世界钟同一批在册色；
 ## ⑤ 锚点族：移动方块真在组里、每一员都是实体（layer 1|4）、挂 TimeReceiver、
@@ -957,10 +957,19 @@ func _verify_time_anchor() -> void:
 		if src.contains(banned):
 			_fail("时间锚点里出现了 %s：D66① 的时间源只认玩家的动作，不认世界钟/全局缩放/存档（D68）"
 				% banned)
-	for gate in ["source.is_dead", "source.movement_locked", "TimeManager.is_ability_enabled",
+	for gate in ["source.is_dead", "source.movement_locked", "TimeManager.is_anchor_enabled",
 			"source.input_handler.is_moving"]:
 		if not src.contains(gate):
 			_fail("时间源的闸缺了 %s：四条缺一条，锚点物就会在某种状态下自己走/自己停（D68）" % gate)
+	# D73：锚点是**独立一项能力**，它读的那道闸不许再回读冻结那一项 ——
+	# 两处读同一个旗标时"分离"这件事就静默地没了，而画面不会报错（行为那半边归第 22 组）。
+	if src.contains("TimeManager.is_ability_enabled"):
+		_fail("时间锚点里回读了 TimeManager.is_ability_enabled：锚点的能力闸自 D73 起是独立旗标 "
+			+ "is_anchor_enabled，读回去等于把两项能力重新焊成一件事")
+	if not FileAccess.get_file_as_string("res://scenes/levels/level_base.gd") \
+			.contains("TimeManager.set_anchor_enabled(start_with_anchor)"):
+		_fail("关卡根没把 start_with_anchor 写进 TimeManager.set_anchor_enabled()：那一项能力从此没有书写者，"
+			+ "勾了导出项也没人开门（D73）")
 	var pump_start := src.find("func _pump_enabled")
 	var pump_end := src.find("func ", pump_start + 1) if pump_start >= 0 else -1
 	if pump_start < 0 or pump_end < 0:

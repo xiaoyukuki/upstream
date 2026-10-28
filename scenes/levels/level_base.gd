@@ -30,6 +30,11 @@ extends Node2D
 
 ## M1 沙盒置 true 以便直接测试时停手感；M2 引导关必须置 false，能力在祭坛处才授予。
 @export var start_with_ability: bool = true
+## 时间锚点（D73）：**另一项能力，与上面那条互不蕴含**。测试期它没有授予路径 ——
+## 祭坛不写它、`run_state` 不记它，只有关卡根这一处写，所以这一格就是它唯一的开关。
+## 只勾这条不勾上面那条：世界照样流动，锚点物仍然"我按着它才走"，但看不到
+## "世界停了它还在走"那层对照（那是上一项能力给的背景，不是这一项的机制）。
+@export var start_with_anchor: bool = false
 
 ## 取景框：position=左上角世界坐标，size=可见范围。留空（size 为 0）则沿用
 ## player.tscn 里的兜底 limits。相机归关卡管，换关才不会互相穿帮（D15）。
@@ -81,6 +86,7 @@ func _ready() -> void:
 	_warn_no_world_root()
 	TimeManager.reset_state()
 	TimeManager.set_ability_enabled(start_with_ability)
+	TimeManager.set_anchor_enabled(start_with_anchor)
 	_place_player()
 	_apply_run_state()
 	_maybe_intro()

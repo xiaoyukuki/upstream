@@ -2028,6 +2028,9 @@ func _test_time_anchor() -> void:
 
 	TimeManager.reset_state()
 	TimeManager.set_ability_enabled(true)
+	# 两项能力自 D73 起各自独立，这一组两样都要开：冻结那一项给"世界停了它还在走"当背景，
+	# 锚点那一项才是发射/供时的门。只开一项的组合在下面那两条否定式里各钉一次。
+	TimeManager.set_anchor_enabled(true)
 
 	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player
 	walker.position = Vector2(100.0, -Player.COLLISION_HALF_HEIGHT)
@@ -2061,9 +2064,26 @@ func _test_time_anchor() -> void:
 	_check("松开即发射，飞完/收回之后回到手上", fired
 		and anchor.current_state() == TimeAnchor.State.IDLE)
 
-	# —— ② 能力闸：没开能力连出膛都不允许（复位走 TimeManager 自己那条链）。 ——
+	# —— ② 两道能力闸各钉一次（D73：锚点与冻结是两件事；谁把两处读回同一个旗标就在这里红）。 ——
+	TimeManager.set_anchor_enabled(false)
+	_check("锚点那一项关着 → 连出膛都不允许（此时冻结那一项仍开着）",
+		not anchor.fire_toward(Vector2.RIGHT) and TimeManager.is_ability_enabled)
+	TimeManager.set_anchor_enabled(true)
 	TimeManager.set_ability_enabled(false)
-	_check("能力没开时发不出去", not anchor.fire_toward(Vector2.RIGHT))
+	# 冻结关着、锚点开着、人正按着方向键：发得出锚，而世界**没有**冻 —— 这一钉是"分离"这件事
+	# 本身的钉子。少了它，把两处读回同一个旗标不会响，只会让锚点悄悄退回祭坛的赠品。
+	Input.action_press(&"move_right")
+	await _frame(3)
+	var fired_shut: bool = anchor.fire_toward(Vector2.RIGHT)
+	var world_flows: bool = not TimeManager.is_time_frozen()
+	Input.action_release(&"move_right")
+	# 松手那一下要等一次主循环 flush 才成边沿（本项目踩过两次的那条）。能力关着时它被静音，
+	# 所以在这里就等掉 —— 留到下面"世界冻着起飞"那一窗，它会把刚钉住的世界解回去，
+	# 于是方块在 0.08 s 缓冲里多走一段，红的是那条相位钉而不是这里。
+	await _frame(3)
+	_check("锚点开着 + 冻结关着 + 按着方向键 → 发得出（%s）且世界是流的（%s）"
+		% [str(fired_shut), str(not world_flows)], fired_shut and world_flows)
+	anchor.reset_state()
 	TimeManager.set_ability_enabled(true)
 
 	# 世界冻着起飞：飞行只吃真实 delta，目标那一整段没人能推 —— 吸附前后读到同一个相位，
@@ -2082,7 +2102,9 @@ func _test_time_anchor() -> void:
 		await _frame(1)
 	_check("飞行段命中锚点族：吸附在方块上", anchor.current_state() == TimeAnchor.State.ATTACHED
 		and anchor.attached_target() == block)
-	_check("吸附不碰目标自己的相位（没被清回 0）",
+	_check("吸附不碰目标自己的相位（没被清回 0；实测 %.3f vs %.3f，世界 %s）" % [
+			block.elapsed_path_time, phase_before,
+			"FROZEN" if TimeManager.is_time_frozen() else "FLOWING"],
 		block.elapsed_path_time == phase_before and phase_before > 0.0)
 	_check("锚插在目标身上（跟着目标原点走）",
 		anchor.global_position.distance_to(block.global_position) < block.block_size.x)
@@ -2333,6 +2355,8 @@ func _test_phase_devices() -> void:
 
 	TimeManager.reset_state()
 	TimeManager.set_ability_enabled(true)
+	# 这一组跑的是"吸附之后跟手"，所以锚点那一项也得单独开（D73 起它不再跟着冻结那一项来）。
+	TimeManager.set_anchor_enabled(true)
 
 	_solid_box(Vector2(1500.0, 300.0), Vector2(4000.0, 600.0))
 	var walker := load("res://scenes/actors/player/player.tscn").instantiate() as Player

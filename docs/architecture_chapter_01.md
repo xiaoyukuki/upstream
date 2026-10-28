@@ -2379,4 +2379,29 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 
 **验收**：`py tools/gen_tiles.py` 打印的 `contrast_report` 里 d 那行 = `wall 48.1 / p/wall 9.91 / o/wall 7.59`，与选型图 B 行逐位相同（同源，不是抄的）；**g 侧可核零变化** —— `git diff` 对 `tilesheet_terrain.png` / `tilesheet_decor.png` / `tiles.json` / `preview_tiles.png` 与九张 `preview_room_*.png`（除 `d`）全空。四条无头守门：`TILESET SELFTEST DONE failures=0 checks=677` / `VERIFY DONE doors=3 pistons=5 fallzones=1 anchorables=3 failures=1`（唯一那条仍是 `level1.tscn` 的 `Objects` 位移）/ `kit-selftest done failures=0` / `SPRITE SELFTEST DONE failures=0`，无 `SCRIPT ERROR`（`--import` 那两条 `ERROR:` 是 MCP 探针端口被开着的编辑器占了 + 资源泄漏基线，与本条无关）。**留给人眼的一条**：真窗口 + 那层 CRT 之下，B 档的 d 在"按住方向键"那一拍还亮不亮、以及墙降到 48.1 之后那套「树丛」装饰的轮廓读不读得比现在清楚（图里读得出，实机没验）。
 
-**编号**：本节点用掉 **D72**（D33 仍是留空号），**下一个空号 D73**。
+**编号**：本节点用掉 **D72**（D33 仍是留空号），**下一个空号 D73**（次日 D73 已用掉 —— 见文末「时间锚点拆成独立一项能力」，现行下一个空号 **D74**）。
+
+---
+
+### D73 · 时间锚点拆成独立一项能力（`is_anchor_enabled`），与"世界冻不冻"互不蕴含 —— 暂时是测试功能
+
+**起因（2026-10-28）**：他提「这应该作为一个独立的新的能力，而目前似乎与时间冻结能力绑定在一起了，我希望分离开来，暂时作为一个测试功能」。绑定是事实而且绑得很紧 —— `TimeManager.is_ability_enabled` 一个 bool 同时被两族读：TimeManager 自己两道（冻结状态机 + 意图通道静音），以及 `time_anchor.gd` **四处**（复位 / 发射闸 / 供时闸 / 画瞄准线与回执）。`verify_kit` 还把那个串钉成了"四条闸缺一不可"之一，所以换名要连钉子一起换。
+
+**四条裁定（他一句"没问题，开始写吧"整体放行）**：
+
+1. **`TimeManager` 加第二个旗标** `is_anchor_enabled` + `set_anchor_enabled()` + `anchor_enabled_changed` 信号，默认 `false`。setter **刻意不跟着关 `reset_state()`** —— 这一项不拥有世界状态，关它只该让锚自己收摊，而那本来就是 `TimeAnchor._physics_process()` 那道闸在做的事。
+2. **锚点那四处换读新旗标，四条闸的形状一字不动**（活着 / 没被移动锁掐 / ~~能力已开~~ 锚点能力已开 / 手上在动）。
+3. **测试入口 = 关卡根导出项 `start_with_anchor: bool = false`**，`LevelBase._ready()` 里写一次 —— 照 `start_with_ability` 现成的形状，所以 F5 与 F6 两种跑法都有效。**不加新调试键**：那会让旗标长出第二个书写者（项目口径"谁亮着只能有一个书写者"）。**不进 `run_state`、祭坛不写它** —— 它是测试开关不是进度，也没有授予路径，直到以后真立"锚点祭坛"那条决策。
+4. **守门要钉住"分离"本身**，否则哪天有人把两处读回同一个旗标不会响。
+
+**三条不显然**：
+
+- **分离之后锚点少了什么，要说在前面**：只开锚点、不开冻结时，"世界冻着它照走"那层**对照感消失**（世界不停、CRT 不上屏），能测到的只剩"我按着它才走、我站着它停"和锚上那 12 格回执走带。这不是 bug，是分离的定义 —— 两项互不蕴含、可以任意组合，想连背景一起测就在同一关把 `start_with_ability` 也勾上。
+- **`verify_kit` 新增两条反向钉**：① 锚点脚本里**不许再出现** `TimeManager.is_ability_enabled`（回读 = 把两项重新焊成一件事）；② 关卡根必须有 `TimeManager.set_anchor_enabled(start_with_anchor)` 那一句（导出项存在而没人写旗标 = 勾了也没开门）。加上原来那条闸名单换名，一共三条钉在"分离"这件事上。
+- **一条本项目踩过两次的输入坑，这次是被自己的新钉子炸出来的**：`Input.action_press/release()` 排的事件要等**下一次主循环 flush** 才成边沿。新那钉"冻结关着 + 按着方向键 → 发得出"里按下又松开，那一下**松手的边沿落到了后面那条"世界冻着起飞"的窗口**，把刚钉住的世界解回流动 → 方块在 0.08 s 缓冲里多走 8.0 个相位单位（`elapsed_path_time += d × travel_speed`，travel_speed 80 ⇒ 0.1 s = 8.0），红的却是**别人那条相位钉**。修法是在断言之后 `await _frame(3)` 把松手边沿就地等掉。**口径：任何在冻结窗口附近按下/松开输入的测试，都要自己先把边沿 flush 干净**，否则症状会漂到下一条断言上，看起来像上一条改动弄坏了玩法。
+
+**契约变更**：`TimeManager` 多一个旗标 + 一个 setter + 一条信号；`LevelBase` 多一个导出项 `start_with_anchor`（已进 `verify_kit` 的导出项白名单）；`run_state` 仍四个键、无新构件、`.tscn` 一字未改。调试面板那一行现在同时显示 `ability=` 与 `anchor=`（两项独立之后必须都看得见）。
+
+**验收**：三条新钉全部先证明会响 —— ①把发射闸改回读 `is_ability_enabled` → `VERIFY … failures=2`（多那条"回读"FAIL）+ `kit-selftest … failures=2`（两条否定式同时红，其中"发得出（false）"正是分离没做到的样子）；②删掉关卡根那一行写入 → `VERIFY … failures=2`（"没有书写者"那条）。两处复原后照绿。四条无头守门：`VERIFY DONE doors=3 pistons=5 fallzones=1 anchorables=3 failures=1`（唯一那条仍是 `level1.tscn` 的 `Objects` 位移，归用户）/ `[kit-selftest] done failures=0` / `SPRITE SELFTEST DONE failures=0` / `TILESET SELFTEST DONE failures=0 checks=677`，无 `SCRIPT ERROR`。**留给人眼**：在沙盒或第二关勾上 `start_with_anchor`（不勾 `start_with_ability`）跑一次，看"世界没冻、只有我按着的那件东西在跟我的手走"读不读得出来 —— 这是这一项能力**第一次脱离祭坛背景**被单独观察。
+
+**编号**：本节点用掉 **D73**（D33 仍是留空号），**下一个空号 D74**。
