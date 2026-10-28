@@ -110,11 +110,28 @@ func _check_sets_share_rects(sets_items: Array) -> void:
 				continue
 			var got: Array = other[name]
 			_ok(want == got, "共有条目 %s 的矩形两套必须相同：%s vs %s" % [name, want, got])
-		var extra: int = 0
+		var extra := 0
 		for name in other:
-			if not base.has(name):
-				extra += 1
-		_ok(extra <= 8, "%s 比落盘那套多出 %d 条 —— 多到这张词汇表装不下，先怀疑清单串了" % [label, extra])
+			if base.has(name):
+				continue
+			extra += 1
+			# 多出来的条目**不许压在任何一个共有条目上**。这条才是 D70 那个坑的正解：
+			# 图集摆重叠不报错，后画的那件把前一件盖掉，清单里还是两块、图集里只看得到一块，
+			# 刷进关卡才发现少一块皮。原来这里写的是「多出的条数 <= 8」，那是"当前条数 +1"
+			# 那种抄第二份数的写法 —— D74 一次加八件就把它撞红了，而它红的原因不是任何一条
+			# 真实约束被破坏。条数只留一条量级上的兜底（清单整个串套时兜），不再当闸用。
+			var r: Array = other[name]
+			for bname in base:
+				var br: Array = base[bname]
+				_ok(not _rects_touch(r, br),
+						"多出的条目 %s %s 与共有条目 %s %s 重叠 —— 后画的会盖掉前一件的皮（D70）"
+						% [name, r, bname, br])
+		_ok(extra <= 64, "%s 比落盘那套多出 %d 条 —— 量级不对，先怀疑清单串了套" % [label, extra])
+
+
+func _rects_touch(a: Array, b: Array) -> bool:
+	return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] \
+			and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
 
 
 ## 两套（或多套）落盘的配色**不许挂着同一张图集**。

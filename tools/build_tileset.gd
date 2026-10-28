@@ -23,6 +23,10 @@ extends SceneTree
 ## 用法（PNG 必须先被导入，否则 load() 拿不到纹理）：
 ##   Godot_console.exe --headless --path . --import
 ##   Godot_console.exe --headless --path . --script res://tools/build_tileset.gd
+## 只重建其中一份：`-- --only=lab_tileset_d`。这一条不是 convenience ——
+## `lab_tileset.tres` 可能被关卡作者手改过（往同一份资源里 graft 别的图集、手画碰撞多边形），
+## 那种改动只存在于工作区、没有第二份，整跑一遍就会连它一起重写掉。
+## 只有当两套的清单都变了时才该整跑。
 
 const PAIRS := [
 	{
@@ -41,7 +45,14 @@ var _failures := 0
 
 
 func _initialize() -> void:
+	var only := ""
+	for arg in OS.get_cmdline_user_args():
+		if str(arg).begins_with("--only="):
+			only = str(arg).trim_prefix("--only=")
 	for pair in PAIRS:
+		if only != "" and not str(pair["out"]).contains(only):
+			print("skip %s（--only=%s）" % [pair["out"], only])
+			continue
 		_build(str(pair["manifest"]), str(pair["out"]))
 	quit(1 if _failures > 0 else 0)
 

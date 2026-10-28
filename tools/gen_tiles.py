@@ -238,6 +238,20 @@ DECOR_LAYOUT_GROVE = [
     ("bones", 464, 304, 1),
     ("crate_wood", 48, 288, 1),
     ("barrel", 88, 288, 1),
+    # D74 第二批八件进演示房：这张图是"刷进关卡长什么样"的唯一收据（同一个 render_room）。
+    ("tree", 112, 240, 1),
+    ("tree", 192, 144, 1),
+    ("log", 544, 288, 1),
+    ("fern", 176, 288, 1),
+    ("ivy_patch", 32, 48, 1),
+    ("ivy_patch", 512, 48, 1),
+    ("moss_side", 384, 336, 1),
+    ("moss_side", 416, 320, 1),
+    ("vine_curtain", 288, 16, 1),
+    ("vine_curtain", 464, 16, 1),
+    ("web_corner", 32, 16, 1),
+    ("web_corner", 576, 16, 1),
+    ("scree", 224, 304, 1),
 ]
 
 SLIMES = [
@@ -989,6 +1003,193 @@ def grove_bones(d, p, x, y, w, h):
         d.rectangle([x + i, y + 14, x + i, y + 15], fill=p["grout"])
 
 
+# ---------------------------------------------------------------- D74：树丛套第二批（八件）
+# 选型图 = tools/gen_grove_decor_preview.py（候选十件，砍掉 puddle 与 leaf_litter）。
+# 三条一起立的规矩：① 每一件的画法**不许画出自己那一格**（图集重叠不报错，后画的盖掉
+# 前一件的皮 —— D70 当场踩过，所以那张图里带一条逐件"出格像素"检查）；② 一颗琥珀都不能沾
+# （pickup 的专属色，D29 起玩家看见琥珀就伸手）；③ 亮底上只有 edge 描边说得出形状，
+# 所以这八件全进 DECOR_NO_ROUND_GROVE，轮廓自己画，不吃那趟整格矩形的后处理描边。
+
+
+def grove_tree(d, p, x, y):
+    """树（48x80）。这套叫「树丛」却没有一棵站着的树：最高的垂直件是 96 高的垂藤，而它是贴墙的。
+    树干走 metal（与木箱/木桶同族，说的是「木质」），冠走 grout/surface（与叶簇同族），
+    果用 accent2 两粒。"""
+    wood = p["metal"]
+    lite, dark = lighter(wood, 0.4), darker(wood, 0.3)
+    tx = x + 21
+    for r in range(30, 80):
+        flare = 2 if r >= 76 else (1 if r >= 72 else 0)
+        d.rectangle([tx - flare, y + r, tx + 5 + flare, y + r], fill=wood)
+        d.rectangle([tx - flare, y + r, tx - flare, y + r], fill=lite)
+        d.rectangle([tx + 5 + flare, y + r, tx + 5 + flare, y + r], fill=dark)
+    for r in (36, 45, 54, 63, 71):
+        d.rectangle([x + 23, y + r, x + 23, y + r + 3], fill=dark)
+    d.rectangle([x + 16, y + 40, x + 20, y + 41], fill=wood)
+    d.rectangle([x + 27, y + 52, x + 31, y + 53], fill=dark)
+    for cx, cy, rx, ry in ((24, 18, 22, 15), (11, 27, 11, 8), (36, 27, 11, 8)):
+        _ellipse(d, x + cx, y + cy, rx, ry, p["edge"])
+        _ellipse(d, x + cx, y + cy, rx - 1, ry - 1, p["grout"])
+    for cx, cy, rx, ry in ((18, 14, 7, 5), (30, 20, 8, 4), (11, 26, 5, 3)):
+        _ellipse(d, x + cx, y + cy, rx, ry, p["surface"])
+    for bx, by in ((15, 30), (33, 32)):
+        d.rectangle([x + bx, y + by, x + bx, y + by], fill=p["accent2"])
+
+
+def grove_ivy(d, p, x, y):
+    """爬墙苔垫（48x32）。墙上从前只挂得出实验室件的换皮（巢箱/壁龛/裂缝/地衣），
+    缺一块「墙自己长了东西」的面。选型图第一版是三排等大等高的叶，实机比例下读成
+    「墙上一排排插座」，所以叶大小与行高都打散、每隔一两列留缺口，再压一层半透明底
+    把散叶绑成一块；顶边那道深色横条也删了 —— 它读成一块搁板，改由几根须说「从上面长下来」。"""
+    _ellipse(d, x + 24, y + 17, 21, 13, rgba(p["grout"], 46))
+    for i in range(11):
+        cx = x + 4 + i * 4
+        d.rectangle([cx, y, cx, y + 1 + (i % 3)], fill=p["deep"])
+    for row, cy in enumerate((11, 20, 26)):
+        for i in range(5):
+            if (row + i) % 5 == 3:
+                continue
+            _leaf(d, p, x + 7 + i * 8 + (4 if row == 1 else 0),
+                  y + cy + ((-2, 1, 0, 1, -1)[i % 5]), (3, 2, 3, 3, 2)[i % 5], 2)
+    for hx in (12, 26, 39):
+        d.rectangle([x + hx, y + 30, x + hx + 1, y + 30], fill=p["deep"])
+
+
+def grove_vine_curtain(d, p, x, y):
+    """藤帘（32x48）。垂藤是 96 高、能三段竖着接的「柱子」；这一件说的是另一头：
+    短、三股、下沿不齐，挂在天花板上当视线遮挡。第一版每股一像素、每 8 行一颗叶，
+    读成三条虚线，所以股身加粗到 2 像素、每 5 行一簇四像素的叶。"""
+    stem, lite, dark = p["metal"], lighter(p["metal"], 0.4), darker(p["metal"], 0.3)
+    d.rectangle([x, y, x + 31, y + 1], fill=dark)
+    d.rectangle([x, y, x + 31, y], fill=stem)
+    for sx, ln, side in ((4, 44, 1), (15, 48, -1), (25, 40, 1)):
+        for r in range(2, ln):
+            col = x + sx + VINE_W[(r // 4) % 8]
+            d.rectangle([col, y + r, col + 1, y + r], fill=stem)
+            d.rectangle([col, y + r, col, y + r], fill=lite if side > 0 else dark)
+            if r % 5 == 3:
+                for k, hh in enumerate((1, 2, 2, 1)):
+                    for s in (1, -1):
+                        lx = col + s * side * (2 + k)
+                        if not (x <= lx < x + 32):
+                            continue                      # 出格不报错，只会盖掉邻格
+                        d.rectangle([lx, y + r - hh, lx, y + r + hh], fill=p["grout"])
+                if 0 <= col + side * 5 - x < 32:
+                    d.rectangle([col + side * 5, y + r, col + side * 5, y + r], fill=p["surface"])
+        d.rectangle([x + sx, y + ln - 1, x + sx + 1, y + ln - 1], fill=p["deep"])
+    d.rectangle([x + 15, y + 30, x + 16, y + 30], fill=p["accent2"])
+
+
+def grove_log(d, p, x, y):
+    """倒木（64x32）。与横根分得很开：那件说的是「贴墙的根」，这一件是落在地上的整根树干，
+    左端带断面年轮，顶上趴一撮苔。第一版是一圈矩形描边 + 顶上竖着的苔簇，读成「带绿齿的木板」，
+    所以剪影改走椭圆（两头收口），苔改成贴着顶线趴下的两像素。"""
+    wood, lite, dark = p["metal"], lighter(p["metal"], 0.4), darker(p["metal"], 0.32)
+
+    def hh(c):
+        return int(round(13.0 * math.sqrt(max(0.0, 1.0 - ((c - 31.5) / 32.5) ** 2))))
+
+    for c in range(64):
+        h = hh(c)
+        if h < 2:
+            continue
+        top, bot = y + 16 - h, y + 16 + h
+        d.rectangle([x + c, top, x + c, bot], fill=wood)
+        d.rectangle([x + c, top, x + c, top], fill=p["edge"])
+        d.rectangle([x + c, bot, x + c, bot], fill=p["edge"])
+        d.rectangle([x + c, top + 1, x + c, top + 1], fill=lite)
+        d.rectangle([x + c, bot - 1, x + c, bot - 1], fill=dark)
+        if c % 9 == 4:
+            d.rectangle([x + c, top + 3, x + c, bot - 2], fill=dark)
+    _ellipse(d, x + 9, y + 16, 6, 8, p["edge"])
+    _ellipse(d, x + 9, y + 16, 5, 7, mix(wood, p["lip_shade"], 0.35))
+    _ellipse(d, x + 9, y + 16, 3, 4, p["edge"])
+    _ellipse(d, x + 9, y + 16, 2, 3, mix(wood, p["lip_shade"], 0.35))
+    _ellipse(d, x + 9, y + 16, 1, 1, p["deep"])
+    for c in range(20, 58, 2):
+        top = y + 16 - hh(c)
+        d.rectangle([x + c, top - 2, x + c + 1, top - 1], fill=p["grout"])
+        d.rectangle([x + c, top - 2, x + c + 1, top - 2], fill=p["surface"])
+    d.rectangle([x + 30, y + 2, x + 31, y + 3], fill=p["accent2"])
+
+
+def grove_fern(d, p, x, y):
+    """蕨（32x32）。叶簇说的是「落下的叶子」，这一件说的是「站着展开的羽叶」。
+    选型图第一版只长到半格高（下垂项写重了，把上升吃光），读成半个篮子；
+    这一版六片撑满这一格，越斜的片越短 —— 才出不了格子。"""
+    cx0, cy0 = x + 16, y + 31
+    for ang in (-72, -44, -16, 16, 44, 72):
+        a = math.radians(ang - 90)
+        n = 24 - abs(ang) // 6
+        for t in range(1, n):
+            fx = int(round(cx0 + math.cos(a) * t * 1.15))
+            fy = int(round(cy0 + math.sin(a) * t * 1.15 + 0.012 * t * t))
+            if not (x <= fx < x + 32 and y <= fy < y + 32):
+                continue
+            d.rectangle([fx, fy, fx, fy], fill=p["deep"])
+            if t % 2 == 0 and t < n - 2:
+                px, py = int(round(math.sin(a) * 2)), int(round(-math.cos(a) * 2))
+                for s in (-1, 1):
+                    nx, ny = fx + px * s, fy + py * s
+                    if x <= nx < x + 32 and y <= ny < y + 32:
+                        d.rectangle([nx, ny, nx, ny], fill=p["grout"])
+            if t == n - 2:
+                d.rectangle([fx - 1, fy, fx + 1, fy], fill=p["surface"])
+    d.rectangle([cx0 - 1, y + 30, cx0 + 2, y + 31], fill=p["deep"])
+
+
+def grove_moss_side(d, p, x, y):
+    """崖面侧苔（16x32）。moss_edge 只管「踏口那一条」，坑壁与崖面从前还是赤裸的砖；
+    这一件是它的竖直版：从贴着的那一侧往外长，厚度逐行抖（同一张 MOSS_W 表），
+    外沿留一列 surface 当毛边，再垂几根须。"""
+    for r in range(32):
+        depth = 3 + _moss_top(4, r)
+        d.rectangle([x, y + r, x + depth, y + r], fill=p["grout"])
+        d.rectangle([x + depth, y + r, x + depth, y + r], fill=p["surface"])
+        if r % 3 == 1:
+            d.rectangle([x + depth + 1, y + r, x + depth + 1, y + r], rgba(p["surface"], 150))
+        if r % 7 == 3:
+            d.rectangle([x, y + r, x + 1, y + r], fill=p["deep"])
+    for r in (6, 15, 24):
+        d.rectangle([x + 9, y + r, x + 9, y + r + 3], fill=rgba(p["deep"], 120))
+
+
+def grove_scree(d, p, x, y):
+    """碎石（16x16）。这套里石头的词汇只有大块（rock），地面缺「小的、散落的」那一档。
+    第一版石头用 lip_shade，对墙正好 1.00 = 只剩一圈描边在说话；换成 mix(edge, bg, .35)
+    这档冷灰之后对墙 3.76 —— 同一件东西，换个主体色才第一次"看得见"。"""
+    stone = mix(p["edge"], p["bg"], 0.35)
+    for cx, cy, rx, ry in ((4, 11, 2, 2), (10, 13, 3, 1), (12, 8, 2, 2)):
+        _ellipse(d, x + cx, y + cy, rx + 1, ry + 1, p["edge"])
+        _ellipse(d, x + cx, y + cy, rx, ry, stone)
+        d.rectangle([x + cx - 1, y + cy - ry + 1, x + cx, y + cy - ry + 1], fill=p["lip_shade"])
+        d.rectangle([x + cx - rx, y + cy + ry + 1, x + cx + rx, y + cy + ry + 1],
+                    fill=rgba(p["edge"], 80))
+    d.rectangle([x + 1, y + 15, x + 2, y + 15], fill=p["deep"])
+
+
+def grove_web(d, p, x, y):
+    """墙角网（32x32）。「很久没人来」那句：crate/barrel 说的是「来过」，还缺「走了很久」。
+    挂左上角，五根放射 + 三道弦，全走半透明 edge —— 亮底上丝网是**暗**的，
+    用 lip 白只有 1.03，等于没画。"""
+    ox, oy = x + 1, y + 1
+    for rad in (9, 18, 28):
+        for t in range(31):
+            a = math.radians(6 + t * 2.7)
+            px = int(round(ox + rad * math.cos(a)))
+            py = int(round(oy + rad * 0.62 * math.sin(a) + rad * 0.30))
+            if x <= px < x + 32 and y <= py < y + 32:
+                d.rectangle([px, py, px, py], fill=rgba(p["edge"], 150))
+    for ang in (8, 30, 52, 74, 96):
+        a = math.radians(ang)
+        for rad in range(2, 30):
+            px = int(round(ox + rad * math.cos(a)))
+            py = int(round(oy + rad * 0.62 * math.sin(a) + rad * 0.30))
+            if x <= px < x + 32 and y <= py < y + 32:
+                d.rectangle([px, py, px, py], fill=rgba(p["edge"], 70))
+    d.rectangle([ox, oy, ox + 2, oy + 1], fill=p["edge"])
+
+
 PAINTERS_GROVE = dict(PAINTERS)      # 两块告示牌继续吃同一份画法：牌面说的是语义，不是风格
 PAINTERS_GROVE.update({
     "pipe_h": grove_root_h,
@@ -1008,6 +1209,16 @@ PAINTERS_GROVE.update({
     "crate_wood": lambda d, p, x, y: grove_crate(d, p, x, y, 32, 32),
     "barrel": lambda d, p, x, y: grove_barrel(d, p, x, y, 16, 32),
     "bones": lambda d, p, x, y: grove_bones(d, p, x, y, 32, 16),
+    # D74 第二批八件（选型图砍掉的两件不进清单：puddle 对墙 1.03 = 静止态就看不见，
+    # leaf_litter 与 moss_edge 抢同一条踏口带）。
+    "tree": grove_tree,
+    "ivy_patch": grove_ivy,
+    "vine_curtain": grove_vine_curtain,
+    "log": grove_log,
+    "fern": grove_fern,
+    "moss_side": grove_moss_side,
+    "scree": grove_scree,
+    "web_corner": grove_web,
 })
 
 # 树丛套多出来的那七件，一律摆在图集 x>=224 的空列上 —— 与 g 那 14 件共用的矩形一格不挪，
@@ -1023,11 +1234,24 @@ DECOR_GROVE_EXTRA = {
     "bones":         (224, 64, 32, 16),
     "crate_wood":    (224, 96, 32, 32),
     "barrel":        (224, 128, 16, 32),
+    # D74 第二批。全摆在 y>=176 那片空区：与 g 共用的那 14 件矩形一格不挪，
+    # 所以「g 的 Decor 层整层复制过来」仍然成立（tileset_selftest 钉着这条方向）。
+    "tree":          (0, 176, 48, 80),
+    "ivy_patch":     (48, 176, 48, 32),
+    "vine_curtain":  (96, 176, 32, 48),
+    "log":           (128, 176, 64, 32),
+    "fern":          (192, 176, 32, 32),
+    "scree":         (224, 176, 16, 16),
+    "moss_side":     (48, 208, 16, 32),
+    "web_corner":    (64, 208, 32, 32),
 }
 
 # 换成树丛词汇之后不再填满整格的条目：那圈沿格子边界画的矩形描边会把一块斑框成一块砖。
+# D74 那八件全是这种"斑"，所以一起进来（轮廓由画法自己画）。
 DECOR_NO_ROUND_GROVE = {"light", "hazard", "led_panel", "vent",
-                        "moss_edge", "leaf_cluster", "mushroom", "flower", "bones"}
+                        "moss_edge", "leaf_cluster", "mushroom", "flower", "bones",
+                        "tree", "ivy_patch", "vine_curtain", "log", "fern",
+                        "moss_side", "scree", "web_corner"}
 
 
 def is_grove(p):
