@@ -534,14 +534,28 @@ def decor_window(d, p, x, y, w, h):
     d.rectangle([ix0, iy0, ix0, iy1], fill=darker(p["glass"], 0.22))
 
 
+ECG_PATTERN = (0, 0, -1, -2, -1, 0, 0, 0, -6, 7, -3, 0, 1, 0)
+                                          # 心电图那一串纵向偏移（周期 14 列 = 一拍：P 波 → QRS 尖
+                                          # → T 波）。**与 scenes/objects/ecg_monitor/ecg_monitor.gd
+                                          # 的 `PATTERN` 是同一道算式的两处书写** —— 那条瓦片在
+                                          # 相位 0 就是那台构件，`verify_kit` 逐格核过。
+                                          # 周期必须整除屏宽 42 列（14 × 3），横滚到接缝才不断。
+
+
 def decor_monitor(d, p, x, y, w, h):
+    """墙上那台心电监护。屏上那条波形**不是** `d.line` 画的：逐列走"从上一列的 y 到这一列的
+    y 的竖条"，这样 GDScript 那半边能逐像素抄同一道式子（`line` 的 Bresenham 走法在 dx=1、
+    dy 最大 13 的段上每列只落一个点，抄不动，只能改成显式竖条）。
+    第一列也接"虚拟的第 -1 列"，于是横向滚动时接缝处不断 —— 构件滚的就是这条式子。"""
     d.rectangle([x, y, x + w - 1, y + h - 1], fill=lighter(p["metal"], 0.18))
     d.rectangle([x + 1, y + 1, x + w - 2, y + h - 2], fill=darker(p["metal"], 0.22))
     sx0, sy0, sx1, sy1 = x + 3, y + 3, x + w - 4, y + h - 6
     d.rectangle([sx0, sy0, sx1, sy1], fill=p["screen"])
     mid = (sy0 + sy1) // 2
-    pts = [(sx0 + i, mid + (0, -3, 3, -1, 1, -4, 2)[i % 7]) for i in range(sx1 - sx0 + 1)]
-    d.line(pts, fill=p["accent"], width=1)
+    for i in range(sx1 - sx0 + 1):
+        a = mid + ECG_PATTERN[(i - 1) % len(ECG_PATTERN)]
+        b = mid + ECG_PATTERN[i % len(ECG_PATTERN)]
+        d.rectangle([sx0 + i, min(a, b), sx0 + i, max(a, b)], fill=p["accent"])
     d.rectangle([sx0, sy1 - 1, sx1, sy1], fill=darker(p["screen"], 0.4))
     for i, c in enumerate((p["accent2"], p["accent"], (240, 240, 240))):
         d.rectangle([x + 4 + i * 4, y + h - 3, x + 5 + i * 4, y + h - 3], fill=c)

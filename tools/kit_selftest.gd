@@ -76,6 +76,11 @@ extends Node
 ##     回世界钟且相位不清零。另钉四件"改坏了不响"的：幽灵态也打得到（底座常实）、
 ##     变实前问占位（玩家/层 4 挡住就停在旧状态）、相切不误判（探针内缩 1 px）、
 ##     period 0 与 duty 0/1 两个极端。
+## 24) 心电监护屏（D75）：第二件纯装饰构件，时序那三条照第 19 那只钟的口径 —— 相位 == 当场
+##     独立重算的 f(世界时钟)（fixture 晚进树，自带累加器的写法在这里露馅）、冻结 20 拍相位
+##     不动且世界时钟本身也没涨（连 `_shown` 也不漂）、解冻后接着推且不漂。另钉皮两条：
+##     推一格就换图、推满一圈回到同一张（1536 格与落盘瓦片逐格比色那半边在 verify_kit，
+##     只有它读得到纹理），以及 `beat_period=0` 时世界在流也钉在相位 0。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -281,6 +286,7 @@ func _ready() -> void:
 	await _test_altar_save()
 	await _test_time_anchor()
 	await _test_phase_devices()
+	await _test_ecg_monitor()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -2693,6 +2699,68 @@ func _test_phase_devices() -> void:
 		node.queue_free()
 	for stray in get_tree().get_nodes_in_group(&"player"):
 		(stray as Node).queue_free()
+	await _frame(2)
+	TimeManager.reset_state()
+
+
+## 第 24 组：心电监护屏（D75）。它零契约、零机制，所以"改坏了不会响"的只有两条：
+## 相位不再是世界时钟的纯函数；以及那块皮不再是"推一格的纯函数"。四钉照第 19 组那只钟的口径，
+## 但它是全项目第一件**皮与图集那块瓦片逐格同源**的构件 —— 比色那半边在 verify_kit（只有它读得到
+## 落盘纹理），这里钉时序与"会动 / 一圈回来是同一张"。
+## ① 相位 == 独立重算的 f(elapsed_world_time)：fixture 晚进树，"自己从 0 累加"那种写法在这里
+##    就对不上（那条写法数值上确实也跟冻结停、跟帧率无关，唯一露馅的就是这个起点偏移）；
+## ② 冻结 20 拍相位一字不动，而且世界时钟本身也没涨 —— 把"停"的归因钉在表上而不是钟上；
+##    连重画缓存 `_shown` 也不许在冻结里漂；
+## ③ 解冻后接着推，并再与 f(世界时钟) 对一次（停过之后不许漂）；
+## ④ `beat_period <= 0` 时世界在流也钉在相位 0 —— 钉的是"填 0 = 不走"这个约定本身。
+## `beat_period` 在这里钉死成 0.05 s（一步 3 拍），不跟脚本默认值 0.7 走：默认值归摆图的人
+## 随时调，照它断言"等 N 拍就一定换格"第二天就会红（D58 那条同一个坑）。
+func _test_ecg_monitor() -> void:
+	TimeManager.reset_state()
+	TimeManager.set_ability_enabled(true)
+	var monitor := load("res://scenes/objects/ecg_monitor/ecg_monitor.tscn").instantiate() as EcgMonitor
+	monitor.beat_period = 0.05
+	monitor.position = Vector2(1500.0, -300.0)
+	add_child(monitor)
+	await _frame(40)
+	var steps: int = monitor.PATTERN.size()
+	var want := int(fmod(TimeManager.elapsed_world_time / monitor.beat_period, 1.0) * float(steps)) % steps
+	_check("相位 == 当场独立重算的 f(世界时钟)（%d 对 %d）" % [monitor.phase(), want],
+		monitor.phase() == want)
+
+	TimeManager.notify_movement_intent(true)
+	await _frame(2)
+	_check("前提：有移动意图即世界冻结", TimeManager.is_time_frozen())
+	var frozen_phase: int = monitor.phase()
+	var t0: float = TimeManager.elapsed_world_time
+	await _frame(20)
+	_check("冻结 20 拍，波形一格没推（%d 还是 %d）" % [frozen_phase, monitor.phase()],
+		monitor.phase() == frozen_phase)
+	_check("没推是因为世界时钟没涨（%s → %s）" % [str(t0), str(TimeManager.elapsed_world_time)],
+		TimeManager.elapsed_world_time == t0)
+	_check("冻结里连重画缓存都停在同一相位（_shown=%s）" % str(monitor.get("_shown")),
+		int(monitor.get("_shown")) == frozen_phase)
+
+	TimeManager.notify_movement_intent(false)
+	var waited := 0
+	while monitor.phase() == frozen_phase and waited < 60:
+		await _frame(1)
+		waited += 1
+	_check("解冻后接着推（等了 %d 拍）" % waited, monitor.phase() != frozen_phase)
+	want = int(fmod(TimeManager.elapsed_world_time / monitor.beat_period, 1.0) * float(steps)) % steps
+	_check("停过之后不漂：相位仍然 == f(世界时钟)（%d 对 %d）" % [monitor.phase(), want],
+		monitor.phase() == want)
+
+	_check("推一格就换图（相位 0 与 1 的网格不同）",
+		monitor.pixel_grid(0) != monitor.pixel_grid(1))
+	_check("推满一整圈回到同一张（相位 0 与 %d 的网格相同）" % steps,
+		monitor.pixel_grid(0) == monitor.pixel_grid(steps))
+
+	monitor.beat_period = 0.0
+	await _frame(6)
+	_check("beat_period=0：世界在流，相位仍钉在 0（%d）" % monitor.phase(), monitor.phase() == 0)
+
+	monitor.queue_free()
 	await _frame(2)
 	TimeManager.reset_state()
 

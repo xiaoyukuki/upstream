@@ -13,6 +13,7 @@
 [ext_resource type="PackedScene" path="res://scenes/objects/collectible/collectible.tscn" id="11_dk"]
 [ext_resource type="PackedScene" path="res://scenes/objects/ability_altar/ability_altar.tscn" id="12_alt"]
 [ext_resource type="PackedScene" path="res://scenes/objects/clock/clock.tscn" id="13_clk"]
+[ext_resource type="PackedScene" path="res://scenes/objects/ecg_monitor/ecg_monitor.tscn" id="14_ecg"]
 [ext_resource type="PackedScene" path="res://scenes/objects/sensor_zone/sensor_zone.tscn" id="14_sz"]
 [ext_resource type="PackedScene" path="res://scenes/objects/fall_zone/fall_zone.tscn" id="15_fz"]
 [ext_resource type="PackedScene" path="res://scenes/objects/spikes/spikes.tscn" id="16_spk"]
@@ -107,3 +108,6 @@ width = 1408.0
 
 [node name="WorldClock" parent="." instance=ExtResource("13_clk")]
 position = Vector2(1120, -80)
+
+[node name="EcgMonitor" parent="." instance=ExtResource("14_ecg")]
+position = Vector2(1216, -160)

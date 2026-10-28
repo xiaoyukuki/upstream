@@ -20,6 +20,7 @@ const SCRIPTS := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://scenes/objects/clock/clock.gd",
+	"res://scenes/objects/ecg_monitor/ecg_monitor.gd",
 	"res://components/clock_device.gd",
 	"res://scenes/objects/phase_panel/phase_panel.gd",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
@@ -52,6 +53,7 @@ const TOOL_SCRIPTS := [
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd",
 	"res://scenes/objects/fall_zone/fall_zone.gd",
 	"res://scenes/objects/clock/clock.gd",
+	"res://scenes/objects/ecg_monitor/ecg_monitor.gd",
 	"res://components/clock_device.gd",
 	"res://scenes/objects/phase_panel/phase_panel.gd",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
@@ -108,6 +110,7 @@ const EXPORTS := {
 	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/objects/clock/clock.gd": ["period"],
+	"res://scenes/objects/ecg_monitor/ecg_monitor.gd": ["beat_period"],
 	"res://components/clock_device.gd": ["period", "duty", "phase"],
 	"res://scenes/objects/phase_panel/phase_panel.gd": ["panel_size"],
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd": ["step_size", "offset"],
@@ -144,6 +147,9 @@ const KEY_SCRIPT := "res://scenes/objects/key_pickup/key_pickup.gd"
 const FALLZONE_SCRIPT := "res://scenes/objects/fall_zone/fall_zone.gd"
 const COLLECTIBLE_SCRIPT := "res://scenes/objects/collectible/collectible.gd"
 const CLOCK_SCRIPT := "res://scenes/objects/clock/clock.gd"
+const ECG_SCRIPT := "res://scenes/objects/ecg_monitor/ecg_monitor.gd"
+const ECG_SCENE := "res://scenes/objects/ecg_monitor/ecg_monitor.tscn"
+const TILES_MANIFEST := "res://assets/tiles/tiles.json"
 const TIME_ANCHOR_SCRIPT := "res://scenes/actors/player/time_anchor.gd"
 const MOVING_BLOCK_SCENE := "res://scenes/objects/moving_block/moving_block.tscn"
 const CLOCK_DEVICE_SCRIPT := "res://components/clock_device.gd"
@@ -246,6 +252,7 @@ func _process(_delta: float) -> bool:
 	_verify_piston()
 	_verify_fall_zone()
 	_verify_clock()
+	_verify_ecg_monitor()
 	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
@@ -696,8 +703,20 @@ func _verify_fall_zone() -> void:
 ## ③ 三档青色色阶的次序不许倒过来（亮格 > 一段余辉 > 二段余辉），未亮的槽必须仍比表盘亮 ——
 ##    倒过来就是"哪一格亮"读不出来，而这只钟剩下的全部价值就是这一格；
 ## ④ 段数与周期对得上：一格 = period/TICKS，TICKS 必须整除进一圈。
+## 把注释行剥掉再扫。**禁令与"必须读某个量"这两类判据都不该被一句注释满足或触发**：
+## D75 落盘当天两头都踩过 —— 文件头里提了一次那个存档字段的原名就把自己判红（假红），
+## 而反过来把 `elapsed_world_time` 只写在注释里、代码里换成墙上时钟，"必须读它"那条就全绿（假绿）。
+func _code_only(src: String) -> String:
+	var kept: Array[String] = []
+	for line in src.split("\n"):
+		if line.strip_edges().begins_with("#"):
+			continue
+		kept.append(line)
+	return "\n".join(kept)
+
+
 func _verify_clock() -> void:
-	var src := FileAccess.get_file_as_string(CLOCK_SCRIPT)
+	var src := _code_only(FileAccess.get_file_as_string(CLOCK_SCRIPT))
 	if src.contains("func _process("):
 		_fail("WorldClock 里出现了 _process：亮格只能走世界时钟，照帧率走会变成冻结里它还在走（D59）")
 	if not src.contains("TimeManager.elapsed_world_time"):
@@ -752,6 +771,132 @@ func _verify_clock() -> void:
 		_fail("WorldClock 一圈描边都没有（D26 第 1 条）：非平铺件在夜光墙上会跟墙糊在一起")
 	root.remove_child(clock)
 	clock.free()
+
+
+## D75 心电监护屏：第二件纯装饰构件，与 D59 那只钟同一族，所以静态这一遍钉的也是那五类
+## "改了不响、要到试玩才露馅"的东西：
+## ① 时基只有 `elapsed_world_time` 一条：出现 `TimeReceiver` / `get_physics_delta` 就是把它
+##    接到了锚点上 —— 装饰被锚走会改皮不改进度，而 D59 定的是"装饰只读世界钟"；出现
+##    `func _process(` 就是照帧率走，冻结里波形还在推（皮说谎，画面不报错）；
+## ② 契约面必须为零：不发 signal、不认 run_state、根必须是纯 Node2D、不带子节点、不进 anchorable 族；
+## ③ 读得出来的两条几何前提：波形那档青色必须比表盘亮（否则"有条线"都读不出来），
+##    屏宽必须是周期列数的整数倍（42 = 6×7，否则横推到接缝处会断一笔）；
+## ④ 相位是纯函数：推满一整圈回到同一张（否则那不是周期滚动是在攒状态），推一格必须换图
+##    （否则它根本没在动），`beat_period <= 0` 钉在相位 0；
+## ⑤ headline：把落盘图集上那块 `monitor` 裁下来，与 `pixel_grid(0)` **逐格比字节**，差一格就红。
+##    矩形是从 `tiles.json` 读的、不是这里写死的 —— 图集里挪一块会红在这里，而不是比错地方还全绿。
+func _verify_ecg_monitor() -> void:
+	var src := _code_only(FileAccess.get_file_as_string(ECG_SCRIPT))
+	if src.is_empty():
+		_fail("读不到 %s" % ECG_SCRIPT)
+		return
+	if src.contains("func _process("):
+		_fail("EcgMonitor 里出现了 _process：波形只能走世界时钟，照帧率走就是冻结里它还在推（D75）")
+	if not src.contains("TimeManager.elapsed_world_time"):
+		_fail("EcgMonitor 没读 TimeManager.elapsed_world_time：相位不再是世界时钟的纯函数，" +
+			"死亡重载后会自己漂（D75 照 D59 裁定 D1①）")
+	for banned in ["Engine.time_scale", "TimeReceiver", "get_physics_delta", "run_state", "\nsignal "]:
+		if src.contains(banned):
+			_fail("EcgMonitor 里出现了 %s：纯装饰构件不许有契约面，也不许换时基（D75 照 D59 裁定 D2）" % banned)
+	var cs: Dictionary = (load(ECG_SCRIPT) as GDScript).get_script_constant_map()
+	var bx: int = cs["BOX_X"]
+	var by: int = cs["BOX_Y"]
+	var sx0: int = cs["SX0"]
+	var sy0: int = cs["SY0"]
+	var sx1: int = cs["SX1"]
+	var sy1: int = cs["SY1"]
+	var pattern: Array = cs["PATTERN"]
+	var cols: int = sx1 - sx0 + 1
+	if cols % pattern.size() != 0:
+		_fail("屏宽 %d 列不是周期 %d 列的整数倍：横推到接缝处会断一笔（D75）" % [cols, pattern.size()])
+	if not (_clum(cs["COL_TRACE"]) > _clum(cs["COL_SCREEN"]) + 0.2):
+		_fail("波形不比表盘亮（%s vs %s）：「屏上有条线」都读不出来（D75）"
+			% [_clum(cs["COL_TRACE"]), _clum(cs["COL_SCREEN"])])
+	# 逐格比字节这一条：纹理是 lossless 导入，`get_data()` 拿到的是原始 RGBA8 字节，
+	# 不经过 get_pixel() 的 sRGB→线性转换 —— 比的是 PNG 里那串数，不是比两个近似的浮点色。
+	var manifest = JSON.parse_string(FileAccess.get_file_as_string(TILES_MANIFEST))
+	if manifest == null:
+		_fail("读不到 %s，皮同源这一条没法验" % TILES_MANIFEST)
+		return
+	var decor: Dictionary = manifest["decor"]
+	var item: Array = decor["items"]["monitor"]
+	var tex := load("res://assets/tiles/%s" % str(decor["file"])) as Texture2D
+	if tex == null:
+		_fail("装饰图集纹理不在: %s" % str(decor["file"]))
+		return
+	var img := tex.get_image()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		_fail("装饰图集是格式号 %d，不是 RGBA8：逐格比字节那条前提没了（得先决定怎么读）"
+			% img.get_format())
+		return
+	if item[2] != bx or item[3] != by:
+		_fail("图集里 monitor 那块是 %dx%d，构件盒子是 %dx%d：瓦片与构件对不上尺寸（D75）"
+			% [item[2], item[3], bx, by])
+		return
+	var data: PackedByteArray = img.get_data()
+	var stride: int = img.get_width() * 4
+	var ecg = _enter(ECG_SCENE)
+	var grid: Array[Color] = ecg.pixel_grid(0)
+	# 比的是 **alpha 逐格相等 + 不透明格的 RGB 逐格相等**。透明格的 RGB 故意不比：导入参数
+	# `process/fix_alpha_border=true` 会把邻居色扩进全透明像素里（防黑边），所以图集上那 12 个
+	# 抠角格的 RGB 是管线填的、不是画师画的 —— 比它会红得莫名其妙。
+	var diffs := 0
+	var first := ""
+	for y in by:
+		for x in bx:
+			var off: int = (int(item[1]) + y) * stride + (int(item[0]) + x) * 4
+			var want: Color = grid[y * bx + x]
+			var want_a: int = int(round(want.a * 255.0))
+			var bad := int(data[off + 3]) != want_a
+			if not bad and want_a > 0:
+				for k in 3:
+					var exp: int = int(round((want.r if k == 0 else want.g if k == 1 else want.b) * 255.0))
+					if int(data[off + k]) != exp:
+						bad = true
+						break
+			if bad:
+				diffs += 1
+				if first.is_empty():
+					first = "(%d,%d) 图集 %s vs 构件 %s" % [x, y,
+						str(_rgba(data, off)), str(_rgba8(want))]
+	if diffs > 0:
+		_fail("构件的相位 0 与落盘图集上那块 monitor 有 %d 格对不上：%s —— 这条瓦片和这台构件"
+			% [diffs, first] + "从此是两张皮，摆上去会看见墙上并排两种监护屏（D75）")
+	# 抠角：四角必须透明，否则整块当成实心盒子糊在墙上（D59 那条环境坑：typed array 的
+	# resize() 填的是不透明黑）。这一条独立于上面那条比色 —— 比色那几道前提（格式、尺寸）
+	# 一旦不成立会提前 return，那时它是这块盒子唯一的闸。
+	for corner in [[0, 0], [bx - 1, 0], [0, by - 1], [bx - 1, by - 1]]:
+		if grid[int(corner[1]) * bx + int(corner[0])].a > 0.0:
+			_fail("EcgMonitor 网格的角 %s 不透明：圆角没了，方块会当成实心盒子糊在墙上（D75）"
+				% str(corner))
+	if ecg.get_class() != "Node2D":
+		_fail("EcgMonitor 的根是 %s，不是纯 Node2D：装饰件不该带任何碰撞体（D75 照 D59）"
+			% ecg.get_class())
+	if ecg.get_child_count() != 0:
+		_fail("EcgMonitor 带了 %d 个子节点：它只需要自己画（时基是世界钟现读的，TimeReceiver 也不用）"
+			% ecg.get_child_count())
+	if ecg.is_in_group(ANCHOR_GROUP):
+		_fail("EcgMonitor 在 anchorable 组里：它是装饰，被锚走只会改皮、不会改任何机制（D75）")
+	if not (ecg.beat_period > 0.0):
+		_fail("EcgMonitor 默认 beat_period=%s：一挂上去就是台不走的屏（D75）" % str(ecg.beat_period))
+	var p0: int = ecg.phase()
+	if p0 < 0 or p0 >= pattern.size():
+		_fail("phase() 越界：%d（应在 0..%d）" % [p0, pattern.size() - 1])
+	ecg.beat_period = 0.0
+	if ecg.phase() != 0:
+		_fail("beat_period=0 时 phase() 给了 %d：填 0 应当是「不走、钉在瓦片原样」，不是随机一相（D75）"
+			% ecg.phase())
+	root.remove_child(ecg)
+	ecg.free()
+
+
+func _rgba(data: PackedByteArray, off: int) -> Array:
+	return [int(data[off]), int(data[off + 1]), int(data[off + 2]), int(data[off + 3])]
+
+
+func _rgba8(c: Color) -> Array:
+	return [int(round(c.r * 255.0)), int(round(c.g * 255.0)),
+		int(round(c.b * 255.0)), int(round(c.a * 255.0))]
 
 
 ## D69 周期器件：相位面板 + 相位穿梭块。静态这一遍钉的全是"改了不响、要到试玩才露馅"那几类：
