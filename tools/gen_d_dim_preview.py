@@ -4,9 +4,12 @@
 第二关（d 亮底）太亮 / 冻结那一拍更亮 —— 降亮档选型图。
 
 两条同源口径（D58 立的规矩：选型图必须由落盘那个渲染函数直接生成）：
-  房间 = tools/gen_tiles.py 的 render_room()，换的只是 STYLES["d"] 调色板里的数值；
+  房间 = tools/gen_tiles.py 的 render_room()，换的只是调色板里的数值；
   冻结那一拍 = tools/gen_freeze_filter_preview.py 的 crt()，就是出货那段 fragment 的离线复现
               （linear_fac 1.3 / scan_fac 0.10 / 色散开），所以图里的"更亮"和游戏里是同一道算式。
+
+基线是 `ORIGINAL_D` 那个字面量（D70 那版原样 `d`），**不是** `STYLES["d"]`：后者现在自带落盘系数，
+读它会把这张图变成"相对当前档"的图，改一次档就所有行一起漂移。
 
 每档出两格：左 = 静止（世界流动），右 = 冻结（按住方向键那一拍）。
 控制台读数值用 ASCII（cp936 会把中文列名糊掉），图上的标注才用中文。
@@ -30,11 +33,26 @@ OUT = os.path.join(ROOT, "assets", "tiles", "preview_d_dim.png")
 CLIP_LINE = 255 / 1.3
 
 FACTORS = (
-    (1.00, "现况 d"),
-    (0.90, "A ×0.90"),
-    (0.80, "B ×0.80"),
+    (1.00, "原样（D72 之前）"),
+    (0.90, "A ×0.90（现落盘）"),
+    (0.80, "B ×0.80（曾落盘）"),
     (0.72, "C ×0.72"),
     (0.64, "D ×0.64"),
+)
+
+# 这张图的基线必须是**字面量**，不能读 `STYLES["d"]`：那一套现在自带落盘系数（D72 之后是 A ×0.90），
+# 再乘一遍就把选型图变成"相对于当前档"的图，每一行的读数都会跟着改档而漂移。
+# 抄自 `git show d00f5c7:tools/gen_tiles.py` 里 D70 那版原样 `d`（唯一一份没有降亮的读数）。
+ORIGINAL_D = dict(
+    label="D  CANDY STICKER  (un-dimmed baseline, d00f5c7)",
+    motif_bg="quilt", motif_terrain="dot", soft=True,
+    decor_set="grove", pickup=G.PICKUP_AMBER,
+    bg=(236, 227, 240), bg2=(214, 203, 222), bg3=(192, 180, 202),
+    surface=(168, 210, 190), grout=(140, 186, 164), deep=(112, 156, 136),
+    lip=(252, 252, 250), lip_shade=(212, 236, 222), edge=(56, 44, 62),
+    accent=(96, 196, 214), accent2=(240, 132, 158),
+    glass=(210, 238, 244), metal=(186, 176, 202), screen=(46, 38, 58),
+    pit_shade=(46, 34, 60, 150),
 )
 
 CELL_W, CELL_H = 640, 360
@@ -87,7 +105,7 @@ def palette_ceiling(p):
 
 
 def main():
-    base = G.STYLES["d"]
+    base = ORIGINAL_D
     body = (10, 12, 12)                      # 主角那团黑，与 contrast_report 同一个抄法
     rows = []
     print("factor  label     mean_stat mean_freeze  clip_freeze%  ceiling  keys_over_clip  "
