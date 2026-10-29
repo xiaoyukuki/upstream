@@ -86,6 +86,11 @@ extends Node
 ##     第一拍就是全隐（不是先亮一下再淡）；远/中/近三档按 near/far 落位；同一站位世界流着 20 拍
 ##     不动（位置纯函数）；世界冻着也一样；人走进自家格子中间那一下不许被重新盖住；场上没有
 ##     玩家时盖回全挡。静态那一半（z 层 / 碰撞开关 / 逐格实心格 / 源码禁令）在 verify_kit。
+## 26) 梦泡新手引导（D77）：开局那一拍钉在睡姿上、**不按就不醒**（用户裁定，没有超时后门）。
+##     四只各认一个动作、各破一次（重复按不双计）、三只破完不发 completed、四只破完且最后一发
+##     的三帧演完才发一次；completed 之后交回的是**现成**那条 2.45 s 苏醒路径，不是第二套"醒"。
+##     另钉两条只有叠上去才看得出的：这一拍里踩上刺不判死（引导不许演到一半人没了 —— 而
+##     `take_intro()` 早已消费，死了也不重演），以及对照组"撤掉之后同一把刺真的会杀"。
 ##
 ## 跑法：Godot --headless --path <项目根> res://tools/kit_selftest.tscn
 
@@ -293,6 +298,7 @@ func _ready() -> void:
 	await _test_phase_devices()
 	await _test_ecg_monitor()
 	await _test_cave_cover()
+	await _test_dream_bubbles()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -2944,6 +2950,129 @@ func _test_cave_cover() -> void:
 
 	hero2.queue_free()
 	cover2.queue_free()
+	await _frame(2)
+	TimeManager.reset_state()
+
+
+## 第 26 组：梦泡新手引导（D77）。这一组钉的全是"改坏了不响、只在开局那一拍露馅"的东西：
+## ① **不按就不醒**（用户裁定）：钉住的窗口 20 拍不释放、皮钉在 wake 第 0 帧
+##    （wake 剪辑不循环，任它自己走完就停在"已经醒完"那张脸上，而这一拍要演的恰恰是没醒）、
+##    按了方向键人也位移不了（复用 D57 那把锁，不另起第二套掐法）；
+## ② 四只各自一次破：重复按同一只不双计、三只破完不发 `completed`、四只破完且最后一发的
+##    三帧演完才发**一次**；
+## ③ `completed` 之后交回的是**现成的**那条苏醒路径（`release_wake()` → 那 2.45 s 窗口），
+##    不是第二套"醒"，且梦泡节点当拍撤掉；
+## ④ 这一拍里危险物杀不到人 —— 并且拿"同样的动作、但这一关没有引导"当对照。
+##    没有那条对照，这条豁免是真是假分不出来（`take_intro()` 在开局那一帧就消费掉了，
+##    演到一半死掉 = 新手引导永久丢失，症状长得像"引导坏了"而不是"我被刺死了"）。
+func _test_dream_bubbles() -> void:
+	TimeManager.reset_state()
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(2)
+	var root = _make_world_root()
+	root.intro_enabled = true
+	var mini := _build_mini_level(root)
+	var level: LevelBase = mini["level"]
+	var sleeper: Player = mini["walker"]
+	var spikes: Node = mini["spikes"]
+	var fires: Array = []
+	await _frame(2)
+	var bubbles := level.get_node_or_null("DreamBubbles") as DreamBubbles
+	_check("进关当帧进入钉住的苏醒窗口（waking 且 held）",
+		sleeper.is_waking() and sleeper.is_wake_held())
+	_check("钉住 = 移动锁挂着（复用 D57 那把）", sleeper.movement_locked)
+	_check("关卡根挂上了一串梦泡", bubbles != null)
+	if bubbles == null:
+		mini["level"].queue_free()
+		root.queue_free()
+		await _frame(2)
+		return
+	_check("梦泡连到关卡根的编排上（completed 有人接）",
+		bubbles.is_connected(&"completed", Callable(level, "_on_dream_completed")))
+	_check("四只都还没破（%d）" % bubbles.popped_count(), bubbles.popped_count() == 0)
+	bubbles.connect(&"completed", func() -> void: fires.append(1))
+
+	# —— ① 皮真的被钉住：wake 剪辑**不循环**，任它自己走完就停在"已经醒完"那张脸上，
+	#     而这一拍要演的恰恰是没醒。静态那一条只认 `is_wake_held()` 这个调用点在不在，
+	#     把分支短路成 `if false and ...` 它分不出来 —— 只能在真帧上证。
+	var skin := sleeper.get_node_or_null("Visual/Sprite") as PlayerVisual
+	_check("拿得到玩家那张皮（下面三条的前提）", skin != null)
+	if skin != null:
+		_check("钉住的这一拍皮是 wake 不是 idle/run（%s）" % str(skin.animation),
+			skin.animation == &"wake")
+		_check("钉住的这一拍停在 wake 第 0 帧（frame=%d）" % skin.frame, skin.frame == 0)
+		await _frame(20)
+		_check("钉住 20 拍后仍是第 0 帧、仍没在播、仍未释放（frame=%d playing=%s held=%s）"
+			% [skin.frame, str(skin.is_playing()), str(sleeper.is_wake_held())],
+			skin.frame == 0 and not skin.is_playing() and sleeper.is_wake_held())
+
+	# —— ④ 豁免：把刺搬到他脚下，这一拍里杀不到 ——
+	spikes.global_position = sleeper.global_position \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(6)
+	_check("梦泡这一拍里踩上刺也不判死（引导不许演到一半人没了）", not sleeper.is_dead)
+
+	# —— ① 按了也不动 + ② 一次破、不双计 ——
+	Input.action_press(&"move_left")
+	await _frame(3)
+	Input.action_release(&"move_left")
+	await _frame(3)
+	_check("按过 A 之后人仍然没有水平速度（掐的是那把锁，不是新写一套）",
+		sleeper.velocity.x == 0.0)
+	_check("按一次破一只（%d）" % bubbles.popped_count(), bubbles.popped_count() == 1)
+	Input.action_press(&"move_left")
+	await _frame(3)
+	Input.action_release(&"move_left")
+	await _frame(3)
+	_check("重复按同一只不双计（%d）" % bubbles.popped_count(), bubbles.popped_count() == 1)
+	_check("三只没破完就不发 completed（已发 %d 次）" % fires.size(), fires.is_empty())
+	for action in [&"move_down", &"jump"]:
+		Input.action_press(action)
+		await _frame(3)
+		Input.action_release(action)
+		await _frame(3)
+	_check("破到三只仍不发 completed（%d / 已发 %d 次）" % [bubbles.popped_count(), fires.size()],
+		bubbles.popped_count() == 3 and fires.is_empty())
+	Input.action_press(&"move_right")
+	await _frame(3)
+	Input.action_release(&"move_right")
+	var waited := 0
+	while fires.is_empty() and waited < 60:
+		await _frame(1)
+		waited += 1
+	_check("四只全破、最后一发的三帧演完后发一次 completed（等了 %d 拍）" % waited,
+		fires.size() == 1)
+	_check("交回的是现成那条苏醒窗口（held 掉了、waking 还在）",
+		not sleeper.is_wake_held() and sleeper.is_waking())
+	_check("演完就把梦泡从场上撤掉（不留一只还能再按的东西）",
+		level.get_node_or_null("DreamBubbles") == null)
+
+	# —— 收尾：把这一关撤干净，再开一关做 ④ 的对照组 ——
+	mini["level"].queue_free()
+	root.queue_free()
+	await _frame(4)
+	TimeManager.reset_state()
+
+	# —— ④ 的对照组：**同一个动作（把那把刺挪到他脚下），只是这一关没有引导**。
+	#     不能就地新造一把刺挂上去 —— 危险物是关卡根 `_ready()` 时全子树扫描后才连的，
+	#     事后挂的没人接 `touched_player`；也不能复用上面那把，它的一次性闩锁已经发过了。
+	var control_root = _make_world_root()
+	control_root.intro_enabled = false
+	var control := _build_mini_level(control_root)
+	var c_player: Player = control["walker"]
+	var c_spikes: Node = control["spikes"]
+	await _frame(2)
+	_check("对照关：没有梦泡（引导只由 `take_intro()` 那一发拉起）",
+		control["level"].get_node_or_null("DreamBubbles") == null)
+	c_spikes.global_position = c_player.global_position \
+		+ Vector2(0.0, Player.COLLISION_HALF_HEIGHT)
+	await _frame(6)
+	_check("对照：同样一把刺压在脚下，引导不在时判死（证明上面那条豁免是真在挡事）",
+		c_player.is_dead)
+
+	control["level"].queue_free()
+	control_root.queue_free()
 	await _frame(2)
 	TimeManager.reset_state()
 

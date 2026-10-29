@@ -22,6 +22,7 @@ const SCRIPTS := [
 	"res://scenes/objects/clock/clock.gd",
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd",
 	"res://scenes/objects/cave_cover/cave_cover.gd",
+	"res://scenes/objects/dream_bubbles/dream_bubbles.gd",
 	"res://components/clock_device.gd",
 	"res://scenes/objects/phase_panel/phase_panel.gd",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
@@ -82,6 +83,7 @@ const SCENES := [
 	"res://scenes/objects/fall_zone/fall_zone.tscn",
 	"res://scenes/objects/clock/clock.tscn",
 	"res://scenes/objects/cave_cover/cave_cover.tscn",
+	"res://scenes/objects/dream_bubbles/dream_bubbles.tscn",
 	"res://scenes/objects/phase_panel/phase_panel.tscn",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
@@ -94,6 +96,9 @@ const SCENES := [
 ## 所以这里按同一份名单逐个点名：少一个就是 FAIL，而不是"开局动画再也没有、也没人说什么"。
 const METHODS := {
 	"res://scenes/levels/main.gd": ["get_run_state", "take_intro", "reload_level", "restart_level"],
+	## 梦泡那一拍的三只闩（D77）：关卡根只问 Player 要这三发，少一发就是"钉不住"或"交不回"。
+	"res://scenes/actors/player/player.gd": ["begin_wake_hold", "is_wake_held", "release_wake"],
+	"res://scenes/objects/dream_bubbles/dream_bubbles.gd": ["popped_count"],
 }
 
 const EXPORTS := {
@@ -114,10 +119,12 @@ const EXPORTS := {
 	"res://scenes/objects/clock/clock.gd": ["period"],
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd": ["beat_period"],
 	"res://scenes/objects/cave_cover/cave_cover.gd": ["reveal_near", "reveal_far"],
+	"res://scenes/objects/dream_bubbles/dream_bubbles.gd": ["pop_frame_seconds", "follow_player"],
 	"res://components/clock_device.gd": ["period", "duty", "phase"],
 	"res://scenes/objects/phase_panel/phase_panel.gd": ["panel_size"],
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd": ["step_size", "offset"],
-	"res://scenes/levels/level_base.gd": ["start_with_ability", "start_with_anchor", "camera_limits", "death_time"],
+	"res://scenes/levels/level_base.gd": ["start_with_ability", "start_with_anchor", "camera_limits",
+		"death_time", "dream_intro"],
 	"res://scenes/levels/main.gd": ["level_scene"],
 }
 
@@ -154,6 +161,10 @@ const ECG_SCRIPT := "res://scenes/objects/ecg_monitor/ecg_monitor.gd"
 const ECG_SCENE := "res://scenes/objects/ecg_monitor/ecg_monitor.tscn"
 const CAVE_COVER_SCRIPT := "res://scenes/objects/cave_cover/cave_cover.gd"
 const CAVE_COVER_SCENE := "res://scenes/objects/cave_cover/cave_cover.tscn"
+## 梦泡（D77）：皮住在清单 + 磁盘 PNG 里，所以三方（清单 / InputMap / PNG）必须逐条对得上。
+const DREAM_SCRIPT := "res://scenes/objects/dream_bubbles/dream_bubbles.gd"
+const DREAM_SCENE := "res://scenes/objects/dream_bubbles/dream_bubbles.tscn"
+const DREAM_MANIFEST := "res://assets/props/dream_bubble.json"
 ## 盖子逐格核的是"实心格"，那份坐标来自 tiles.json；合成用的空层也挂这一份图集。
 const LAB_TILESET := "res://assets/tiles/lab_tileset.tres"
 const TILES_MANIFEST := "res://assets/tiles/tiles.json"
@@ -184,6 +195,8 @@ var _fallzones_checked: int = 0
 var _anchorables_checked: int = 0
 ## 假墙盖（D76）：现在还没有关卡摆过，所以只记账不设门槛。
 var _covers_checked: int = 0
+## 梦泡（D77）：清单里核对过几只就报几只。四只是定死的，所以这里设下限当"扫描没空转"的闸。
+var _dreams_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -264,15 +277,19 @@ func _process(_delta: float) -> bool:
 	_verify_clock()
 	_verify_ecg_monitor()
 	_verify_cave_cover()
+	_verify_dream_bubbles()
 	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
-	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d covers=%d failures=%d"
+	# 同一条口径管梦泡：清单要是被清空、或那只泡从没被扫到，上面那一整段会全绿着空转。
+	if _dreams_checked < 4:
+		_fail("只核对到 %d 只梦泡（应为 4：A / S / space / D）—— 清单扫描空转了（D77）" % _dreams_checked)
+	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d covers=%d dreams=%d failures=%d"
 		% [_doors_checked, _pistons_checked, _fallzones_checked, _anchorables_checked,
-			_covers_checked, _failures])
+			_covers_checked, _dreams_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -1101,6 +1118,213 @@ func _cover_cell_problems(cover: TileMapLayer) -> PackedStringArray:
 			+ "应为 src=0 atlas=%s alt=0）：接缝会露馅")
 			% [bad, total, str(first), first_src, str(first_atlas), first_alt, str(solid)])
 	return out
+
+
+## D77 梦泡（新手引导）的静态一遍。第 26 组钉的是帧上的行为，这里钉的是"改了不响、
+## 要到开局那一拍才露馅"的那六类：
+## ① 时基只有**引擎固定物理步长**一条：读世界钟 / 挂 TimeReceiver / 写 run_state / `_process`
+##    全禁 —— 这一拍整段掐输入，"你按了 A 所以它停了"这种读法会把教学打成 bug（D76 那条
+##    "照时钟揭幕会在人正朝它走的时候停住"是同一个形状），`_process` 则让漂移照帧率走；
+## ② 几何、角度、动作映射只许有一份：全读 `assets/props/dream_bubble.json`。清单里那个半径值
+##    与四个角度值不许在构件源码里再出现一次（"断言不许抄第二份数"在皮这一侧的对应物），
+##    四个动作名也不许写死在构件里 —— 否则改清单改不动代码，两边静默分叉；
+## ③ 清单 ↔ InputMap ↔ 磁盘 PNG 三方逐条核对：动作改名、零件少一帧、纹理尺寸与清单不符、
+##    出厂态是张白纸，都在这里红，而不是等开局那只泡是空白；
+## ④ 摆位两条硬前提：四只都在弧心以上（选型图第一轮真把 S 糊在睡脸上过），且每只泡离弧心
+##    最近的边仍比玩家碰撞盒半高远（值从 player.gd 的常量读，不抄第二份）；
+## ⑤ 接线在关卡根那侧：`begin_wake_hold()` / `release_wake()` 各恰好一处、危险物豁免真在
+##    `_on_hazard_touched` 的函数体里、皮那侧的钉睡分支必须排在 `if not is_playing()` 之前
+##    （wake 剪辑不循环，顺序倒了就停在"已经醒完"那张脸上）；
+## ⑥ F9 跳键必须绑在 F9、被 `OS.is_debug_build()` 挡着、且带 DEBUG-KEY 标记（打包按这一句删）。
+func _verify_dream_bubbles() -> void:
+	var src := _code_only(FileAccess.get_file_as_string(DREAM_SCRIPT))
+	if src.is_empty():
+		_fail("读不到 %s" % DREAM_SCRIPT)
+		return
+	for banned in ["elapsed_world_time", "TimeReceiver", "get_physics_delta", "run_state",
+			"Engine.time_scale", "anchorable"]:
+		if src.contains(banned):
+			_fail("DreamBubbles 里出现了 %s：这一拍的时基只有引擎物理步长一条，也不许有第二张契约面（D77）"
+				% banned)
+	if src.contains("func _process("):
+		_fail("DreamBubbles 里出现了 _process：漂移与破帧照帧率走，掉帧时引导自己变快（D77）")
+	if not src.contains("func _physics_process("):
+		_fail("DreamBubbles 没有 _physics_process：四只泡停在出厂态 = 永不苏醒（不按就不醒这条会静默变成「怎么按都不醒」）")
+	var reads := src.count("Input.is_action_just_pressed(")
+	if reads < 2:
+		_fail("DreamBubbles 里 `is_action_just_pressed` 只有 %d 发（要 2：跳键一发 + 四只泡按动作那一发）：" % reads +
+			"后一发没了就是键盘检验这条静默失效（D77）")
+	if not src.contains("OS.is_debug_build()"):
+		_fail("DreamBubbles 的跳键没被 OS.is_debug_build() 挡着：发布版里 F9 白拿一段引导（D77）")
+	# 标记按规矩打在代码行本身或它上一行 —— 只扫全文会被文件头那段说明喂绿（那不是删得掉的行）。
+	var raw_lines := FileAccess.get_file_as_string(DREAM_SCRIPT).split("\n")
+	var marked := false
+	for i in raw_lines.size():
+		if not str(raw_lines[i]).contains("dev_skip_dream"):
+			continue
+		if str(raw_lines[i]).contains("DEBUG-KEY") \
+				or (i > 0 and str(raw_lines[i - 1]).contains("DEBUG-KEY")):
+			marked = true
+	if not marked:
+		_fail("DreamBubbles 里读 dev_skip_dream 那一行没有 DEBUG-KEY 标记：打包时找不到该删哪一句（D77）")
+
+	var manifest = JSON.parse_string(FileAccess.get_file_as_string(DREAM_MANIFEST))
+	if manifest == null:
+		_fail("读不到 %s —— 先跑 py tools/gen_dream_bubble_parts.py（D77）" % DREAM_MANIFEST)
+		return
+	for key in ["radius", "arc_origin_y", "bubbles", "parts", "states"]:
+		if not manifest.has(key):
+			_fail("清单缺键 %s（构件全靠它，源码里不许有第二份）（D77）" % key)
+	if manifest.has("radius") and src.contains(str(int(manifest["radius"]))):
+		_fail("构件源码里出现了第二份半径 %s：几何只许读清单（D77）" % str(int(manifest["radius"])))
+	for entry in manifest["bubbles"]:
+		if src.contains(str(int(entry["deg"]))):
+			_fail("构件源码里出现了第二份角度 %s：摆位只许读清单（D77）" % str(int(entry["deg"])))
+	for action in ["move_left", "move_down", "move_right", "jump"]:
+		if src.contains("\"%s\"" % action) or src.contains("&\"%s\"" % action):
+			_fail("构件源码里写死了动作名 %s：映射只许住在清单里，否则改清单改不动代码（D77）" % action)
+
+	var states: int = int(manifest.get("states", 0))
+	var radius: float = float(manifest.get("radius", 0.0))
+	var bubbles: Array = manifest.get("bubbles", [])
+	var parts: Dictionary = manifest.get("parts", {})
+	if states < 2:
+		_fail("清单 states=%d：破的那一拍至少要留两帧，否则「按下去会发生什么」教不出来（D77）" % states)
+	if bubbles.size() != 4:
+		_fail("清单里是 %d 只泡（D77 定死四只：A / S / space / D；要加第五只先回来落档再改这条）"
+			% bubbles.size())
+	# 集合核对：D77 裁的是"四只 = 左 / 下 / 跳 / 右"，W（InputMap 里没有向上这个动作）与 Q
+	#（这一拍 movement_locked 为真，那只泡永远破不了 = 直接软锁）都不许悄悄回来。
+	var seen := {}
+	for entry in bubbles:
+		seen[str(entry.get("action", ""))] = true
+	for want in ["move_left", "move_down", "move_right", "jump"]:
+		if not seen.has(want):
+			_fail(("清单里没有 %s 这只泡：这一拍教的是移动与跳四件事，"
+				+ "少一只就有一个人按了没反应还以为是键盘坏了（D77）") % want)
+	if seen.has("move_up") or seen.has("anchor"):
+		_fail("清单里出现了 W 向或 Q（anchor）那一只：D77 明确撤过 —— 向上没有动作可绑，" +
+			"而这一拍锁着移动，锚点泡永远破不了会直接软锁（D77）")
+
+	var arc_y: float = float(manifest.get("arc_origin_y", 0.0))
+	var player_cs: Dictionary = (load("res://scenes/actors/player/player.gd") as GDScript) \
+		.get_script_constant_map()
+	var box_half: float = float(player_cs.get("COLLISION_HALF_HEIGHT", 15.0))
+	var prev_x := -1.0e20
+	for entry in bubbles:
+		var action := str(entry.get("action", ""))
+		var part := str(entry.get("part", ""))
+		if not InputMap.has_action(StringName(action)):
+			_fail("清单里的动作 %s 不在 InputMap：那只泡没人按得破，引导变成死锁（D77）" % action)
+		var deg := float(entry.get("deg", 0.0))
+		var pos := Vector2(radius * cos(deg_to_rad(deg)), -radius * sin(deg_to_rad(deg)))
+		if pos.x <= prev_x:
+			_fail("清单的摆位不是从左到右（%s 落在 x=%.1f，前一只 x=%.1f）：阅读顺序 A→S→space→D 要按图走（D77）"
+				% [part, pos.x, prev_x])
+		prev_x = pos.x
+		if pos.y >= 0.0:
+			_fail("泡 %s 落在弧心下方（y=%.1f）：会糊在睡脸/脚上，第一轮选型图真踩过（D77）" % [part, pos.y])
+		var size: Array = parts.get(part, [])
+		if size.size() != 2:
+			_fail("清单 parts 里没有 %s 的尺寸（D77）" % part)
+			continue
+		var hw: float = float(size[0]) * 0.5
+		var hh: float = float(size[1]) * 0.5
+		var unit := pos.normalized()
+		var support: float = hw * absf(unit.x) + hh * absf(unit.y)
+		if radius - support < box_half:
+			_fail("泡 %s 最近边到弧心只有 %.1f px（< 玩家碰撞盒半高 %.1f）：那只泡压在人身上（D77）"
+				% [part, radius - support, box_half])
+		# 磁盘上的零件：一帧都不许缺，尺寸必须与清单一致（构件按"块心"画，尺寸对不上就错位）。
+		var base_opaque := -1
+		for state in states:
+			var path := "res://assets/props/dream_bubble/%s_%d.png" % [part, state]
+			if not FileAccess.file_exists(path):
+				_fail("零件不在: %s（先跑 py tools/gen_dream_bubble_parts.py，再 --import）（D77）" % path)
+				continue
+			var tex := load(path) as Texture2D
+			if tex == null:
+				_fail("纹理加载失败: %s（多半是没 --import）（D77）" % path)
+				continue
+			if tex.get_width() != int(size[0]) or tex.get_height() != int(size[1]):
+				_fail("%s 是 %dx%d，清单写的 %dx%d：构件按清单尺寸对齐，对不上就错位（D77）"
+					% [path, tex.get_width(), tex.get_height(), int(size[0]), int(size[1])])
+			var img := tex.get_image()
+			img.convert(Image.FORMAT_RGBA8)
+			var opaque := 0
+			for y in img.get_height():
+				for x in img.get_width():
+					if img.get_pixel(x, y).a > 0.0:
+						opaque += 1
+			var total := img.get_width() * img.get_height()
+			if state == 0:
+				base_opaque = opaque
+				if opaque * 2 < total:
+					_fail("%s 出厂态只占了 %d/%d 格：那只泡在夜光墙上等于不存在（D77）"
+						% [path, opaque, total])
+			elif base_opaque > 0 and opaque >= base_opaque:
+				_fail("%s 不比出厂态稀疏：破的那三帧没在散，按下去看不出「它破了」（D77）" % path)
+	_dreams_checked += bubbles.size()
+
+	var scene = load(DREAM_SCENE).instantiate()
+	root.add_child(scene)
+	if scene.get_class() != "Node2D":
+		_fail("dream_bubbles.tscn 的根是 %s，不是纯 Node2D：引导件不许带碰撞体——它会自己挡在人和地之间（D77）"
+			% scene.get_class())
+	if scene.get_child_count() != 0:
+		_fail("dream_bubbles.tscn 带了 %d 个子节点：它只需要自己画纹理（D77）" % scene.get_child_count())
+	var cover = load(CAVE_COVER_SCENE).instantiate()
+	if scene.z_index <= cover.z_index:
+		_fail("梦泡的 z=%d 没高过假墙盖的 z=%d：开局要是站在盖子底下，四只泡会被糊掉（D77）"
+			% [scene.z_index, cover.z_index])
+	if scene.z_index <= 0:
+		_fail("梦泡的 z=%d 没高过玩家（z=0）：那一拍要看的是泡，不是后脑勺（D77）" % scene.z_index)
+	cover.free()
+	root.remove_child(scene)
+	scene.free()
+
+	var base := _code_only(FileAccess.get_file_as_string(LEVEL_BASE_SCRIPT))
+	var holds := base.count("begin_wake_hold()")
+	if holds != 1:
+		_fail("LevelBase 里 begin_wake_hold() 的调用点 = %d（应为 1）：钉住只许一个书写者（D77）" % holds)
+	var wakes := base.count("release_wake()")
+	if wakes != 1:
+		_fail("LevelBase 里 release_wake() 的调用点 = %d（应为 1）：交回只许一个书写者，" % wakes +
+			"多一处就是第二条并行的「醒」路径（D77）")
+	if not base.contains("player.begin_wake()"):
+		_fail("LevelBase 的 `dream_intro=false` 那一支没走现成的 begin_wake()：「这关不做引导」" +
+			"该是合法配置而不是人永远睡着（D77）")
+	var hazard_body := _func_body(base, "func _on_hazard_touched(")
+	if not hazard_body.contains("_dream != null"):
+		_fail("_on_hazard_touched 的函数体里没有 _dream 豁免：引导演到一半人被刺死，" +
+			"而 take_intro 早就消费掉了 —— 这一世不再重演（D77）")
+	var visual := _code_only(FileAccess.get_file_as_string("res://scenes/actors/player/player_visual.gd"))
+	var hold_at := visual.find("is_wake_held()")
+	var play_at := visual.find("if not is_playing()")
+	if hold_at < 0:
+		_fail("PlayerVisual 没有钉睡分支：held 只锁移动不锁皮，wake 剪辑会自己走完（D77）")
+	elif play_at >= 0 and hold_at > play_at:
+		_fail("钉睡分支排在了 `if not is_playing()` 之后：剪辑不循环，走完就停在「已经醒完」那张脸上（D77）")
+
+	if not InputMap.has_action(&"dev_skip_dream"):
+		_fail("InputMap 里没有 dev_skip_dream：开发期每次启动都要按四下才动（D77）")
+	else:
+		var on_f9 := false
+		for event in InputMap.action_get_events(&"dev_skip_dream"):
+			if event is InputEventKey and int((event as InputEventKey).physical_keycode) == int(KEY_F9):
+				on_f9 = true
+		if not on_f9:
+			_fail("dev_skip_dream 没绑 F9 physical_keycode：跳键找不到，打包时也就不知道该删哪条（D77）")
+
+
+## 取某个函数的体（到下一个顶层 `func ` 为止）。豁免这类判据必须钉在**那一个函数里**，
+## 全文 contains 会被别处的同名变量喂绿（`_dream != null` 在 _on_dream_completed 里也有一句）。
+func _func_body(src: String, signature: String) -> String:
+	var at := src.find(signature)
+	if at < 0:
+		return ""
+	var next := src.find("\nfunc ", at + signature.length())
+	return src.substr(at, next - at) if next > 0 else src.substr(at)
 
 
 func _tiles_manifest() -> Dictionary:
