@@ -114,7 +114,7 @@ const EXPORTS := {
 	"res://scenes/objects/electric_bar/electric_bar.gd": ["length", "period", "duty", "phase", "blocks_when_live"],
 	"res://scenes/objects/key_door/key_door.gd": ["height", "width", "sensor_reach", "sensor_height", "key", "swipe_time"],
 	"res://scenes/objects/collectible/collectible.gd": ["skin", "spin_period"],
-	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_size", "reach", "max_steps"],
+	"res://scenes/objects/afterimage_emitter/afterimage_emitter.gd": ["fall_speed", "emit_interval", "step_width", "step_length", "reach", "max_steps"],
 	"res://scenes/objects/fall_zone/fall_zone.gd": ["width", "depth", "visible_in_game"],
 	"res://scenes/objects/clock/clock.gd": ["period"],
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd": ["beat_period"],
@@ -480,6 +480,15 @@ func _verify_afterimage() -> void:
 	var src := FileAccess.get_file_as_string(path)
 	if src.contains("func _process("):
 		_fail("AfterimageEmitter 里出现了 _process：实体切换只能走物理通道（D47）")
+	# 旧旋钮名的迁移哨（D47 订正）：引擎会**静默丢掉** .tscn 里认不出的属性 —— 不报错、
+	# 不警告，那台机器直接退回默认 32×32。旧场景里那行 `step_size = 40.0` 只能靠文本找回来。
+	for level_path in _discover_level_scenes():
+		var text := FileAccess.get_file_as_string(level_path)
+		for chunk in text.split("[node "):
+			if not chunk.split("\n")[0].begins_with("name=\"AfterimageEmitter\""):
+				continue
+			if chunk.contains("step_size ="):
+				_fail("%s 的 AfterimageEmitter 还写着 step_size：这个旋钮已拆成 step_width / step_length，引擎把那一行静默丢掉了（这台现在悄悄退回 32×32）" % level_path)
 	# 只按名字捞 autoload，不写 `TimeManager.`：静态引用会让本脚本编译期依赖 autoload，
 	# 而 --script 模式下的 autoload 本来就是个"实测在、契约上不保证在"的东西。
 	var tm = root.get_node_or_null("/root/TimeManager")
@@ -493,13 +502,14 @@ func _verify_afterimage() -> void:
 	if emitter.active_steps() < 1 or emitter.active_steps() > emitter.max_steps:
 		_fail("默认档的链上 %d 格，落在 [1, max_steps=%d] 之外"
 			% [emitter.active_steps(), emitter.max_steps])
-	if emitter.pitch() <= emitter.step_size:
-		_fail("默认节距 %s 比格宽 %s 还小：相邻两格互相穿模，链会糊成一坨"
-			% [str(emitter.pitch()), str(emitter.step_size)])
+	if emitter.pitch() <= emitter.step_length:
+		_fail("默认节距 %s 比格长 %s 还小：相邻两格互相穿模，链会糊成一坨"
+			% [str(emitter.pitch()), str(emitter.step_length)])
 	# 下面所有数值断言都跑在这一档显式参数上（= D47 表里那一档），与脚本默认值脱钩。
 	emitter.fall_speed = 400.0
 	emitter.emit_interval = 0.20
-	emitter.step_size = 32.0
+	emitter.step_width = 32.0
+	emitter.step_length = 32.0
 	emitter.reach = 320.0
 	emitter.max_steps = 8
 	if not is_equal_approx(emitter.pitch(), 80.0):
@@ -535,9 +545,9 @@ func _verify_afterimage() -> void:
 			_fail("流动中第 %d 格还在层 %d（穿透契约破了）" % [i, bodies[i].collision_layer])
 	var n: int = emitter.active_steps()
 	for k in n:
-		if not is_equal_approx(bodies[k].position.y, emitter.step_top_y(k) + emitter.step_size * 0.5):
+		if not is_equal_approx(bodies[k].position.y, emitter.step_top_y(k) + emitter.step_length * 0.5):
 			_fail("第 %d 格在 y=%s，公式要 %s（位置必须是时钟的纯函数）"
-				% [k, str(bodies[k].position.y), str(emitter.step_top_y(k) + emitter.step_size * 0.5)])
+				% [k, str(bodies[k].position.y), str(emitter.step_top_y(k) + emitter.step_length * 0.5)])
 		if not is_equal_approx(emitter.step_top_y(k + 1) - emitter.step_top_y(k), emitter.pitch()):
 			_fail("相邻两格不等距（节距 %s）" % str(emitter.pitch()))
 	if emitter.step_top_y(0) < 0.0 or emitter.step_top_y(0) >= emitter.pitch():
@@ -566,10 +576,21 @@ func _verify_afterimage() -> void:
 			_fail("解冻后第 %d 格还压在层 %d" % [i, bodies[i].collision_layer])
 
 	# 改导出项的 setter 链路：盒子和格数都得跟着重算，摆图时才能一眼看清占多大。
-	emitter.step_size = 48.0
+	# 两轴分两次只改一维：改长度不许把宽度也拽走（D47 订正，这一格不再是正方形）。
+	emitter.step_length = 48.0
 	for rect in _collect_rects(emitter):
-		if rect.size != Vector2(48.0, 48.0):
-			_fail("改 step_size 后碰撞盒没跟着重算，还是 %s" % str(rect.size))
+		if rect.size != Vector2(32.0, 48.0):
+			_fail("只改 step_length 后碰撞盒是 %s（应 32x48：长度与宽度各归各的）" % str(rect.size))
+	emitter.step_width = 24.0
+	for rect in _collect_rects(emitter):
+		if rect.size != Vector2(24.0, 48.0):
+			_fail("改 step_width=24 后碰撞盒是 %s（应 24x48：改宽度也不许带走长度）" % str(rect.size))
+	# 宽长不等时再核一次对中：拿宽度当高度算在这档之前看不出来（32×32 时两种写法同值），
+	# 而它会让踩面错开半个差、判死带跟着偏移。
+	for k in emitter.active_steps():
+		if not is_equal_approx(bodies[k].position.y, emitter.step_top_y(k) + emitter.step_length * 0.5):
+			_fail("宽长不等时第 %d 格没按格长对中：y=%s，要 %s"
+				% [k, str(bodies[k].position.y), str(emitter.step_top_y(k) + emitter.step_length * 0.5)])
 	emitter.reach = 480.0
 	if emitter.active_steps() != 7:
 		_fail("reach 480 / 节距 80 应要 7 格，实际 %d" % emitter.active_steps())
@@ -590,9 +611,9 @@ func _verify_afterimage_kill(emitter, bodies: Array) -> void:
 		_fail("AfterimageEmitter 子树里出现了 Area2D：它得回去受危险物层契约管（改 _check_level_hazards）")
 	var inset: float = (load(AFTERIMAGE_SCRIPT) as GDScript).get_script_constant_map()["KILL_INSET"]
 	var cell := emitter.step_rect(0) as Rect2
-	if not is_equal_approx(cell.size.x, emitter.step_size) or not is_equal_approx(cell.size.y, emitter.step_size):
-		_fail("判死方块 %s 与格宽 %s 不等：判死的不是画出来、撞到的那一格"
-			% [str(cell.size), str(emitter.step_size)])
+	if not is_equal_approx(cell.size.x, emitter.step_width) or not is_equal_approx(cell.size.y, emitter.step_length):
+		_fail("判死方块 %s 与格 %s 不等：判死的不是画出来、撞到的那一格"
+			% [str(cell.size), str(Vector2(emitter.step_width, emitter.step_length))])
 	if not is_equal_approx(cell.get_center().x, (bodies[0] as Node2D).global_position.x) \
 			or not is_equal_approx(cell.get_center().y, (bodies[0] as Node2D).global_position.y):
 		_fail("判死方块没对准第 0 格的碰撞体：索引或偏移接错了")

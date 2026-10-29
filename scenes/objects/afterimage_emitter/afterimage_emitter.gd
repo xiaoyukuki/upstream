@@ -54,7 +54,7 @@ signal touched_player(player: Node2D)
 ## 判死带相对整格内缩的余量。物理把人停在踩面上会留一丝穿透（实测 5e-6 px 量级），
 ## 内缩就把"踩住了"和"被钉在里面"分开。这条数同时是**难度旋钮**：脚底要陷进可见踩面
 ## 以下这么多 px，冻结那一刻才算被钉住（D48 定的是 2，用户试玩后嫌太狠，2026-09-23 放到 5）。
-## 上限是格边的一半（`verify_kit` 钉"内缩带不许塌"），默认格宽 32 时还有的是余量。
+## 上限是短边的一半（`verify_kit` 钉"内缩带不许塌"），默认 32×32 时还有的是余量。
 const KILL_INSET: float = 5.0
 ## 判死只问**落脚点**：脚底往上这一条薄带。头被上一格蹭到不算 —— 节距 80 时站在踩面上
 ## 头顶离上一格只有 18 px，一松手链就追上来，拿身体重叠判死等于"松手即死刑"。
@@ -62,22 +62,28 @@ const FEET_PROBE: float = 2.0
 
 ## 下坠速度（px/s，世界时间）。常量而非加速：加速会让相邻两格的间隔随下落时间线性涨，
 ## "整条都是台阶"就只在一条窄带里成立（D47 被否的第 2 条）。
-@export var fall_speed: float = 800.0:
+@export var fall_speed: float = 100.0:
 	set(value):
 		fall_speed = value
 		queue_redraw()
 
 ## 生成间隔（秒，世界时间）。节距 = fall_speed × 它，是算出来的、不是手填的。
 ## 上限是"屏上至少两格"：T ≤ 房间净高 / (2V)，再大就读不出"一串在落的东西"。
-@export var emit_interval: float = 0.40:
+@export var emit_interval: float = 1.20:
 	set(value):
 		emit_interval = maxf(value, 0.001)
 		queue_redraw()
 
-## 一格多大（正方形边长，px）。
-@export var step_size: float = 32.0:
+## 一格多宽（垂直于落向，px）。与 `step_length` 分家：改长度不该顺手把踏板加宽。
+@export var step_width: float = 32.0:
 	set(value):
-		step_size = value
+		step_width = value
+		_rebuild()
+
+## 一格多长（沿落向，px）—— 踩面那一维。节距必须比它大，否则相邻两格互相穿模。
+@export var step_length: float = 32.0:
+	set(value):
+		step_length = value
 		_rebuild()
 
 ## 喷嘴口往下，链活到多远。落出这个距离的格子既不存在也不画。
@@ -173,7 +179,7 @@ func _place() -> void:
 			% [want, max_steps])
 	var n := active_steps()
 	for i in n:
-		_bodies[i].position = Vector2(0.0, step_top_y(i) + step_size * 0.5)
+		_bodies[i].position = Vector2(0.0, step_top_y(i) + step_length * 0.5)
 
 
 ## 层清 0 = 不在任何层上 = 什么都撞不到它。不动 shape、不动 position：
@@ -193,10 +199,10 @@ func _apply_layers(solid: bool) -> void:
 ## 画的是它、撞的是它、判死的也是它，三者必须是同一个矩形（D36 第 6 条），
 ## 而拿全局变换算的话喷嘴被旋转或缩放也不会说谎。
 func step_rect(i: int) -> Rect2:
-	var half := step_size * 0.5
+	var half := Vector2(step_width, step_length) * 0.5
 	var t := _bodies[i].global_transform
-	var a := t * Vector2(-half, -half)
-	var b := t * Vector2(half, half)
+	var a := t * -half
+	var b := t * half
 	return Rect2(a, b - a).abs()
 
 
@@ -237,7 +243,7 @@ func _rebuild() -> void:
 		add_child(body)
 		_bodies.append(body)
 		_shapes.append(shape_node)
-	var size := Vector2(step_size, step_size)
+	var size := Vector2(step_width, step_length)
 	for shape_node in _shapes:
 		var current := shape_node.shape as RectangleShape2D
 		if current == null or current.size != size:
@@ -250,9 +256,9 @@ func _rebuild() -> void:
 
 func _draw() -> void:
 	var solid := is_solid()
-	var half := step_size * 0.5
+	var half_w := step_width * 0.5
 	for k in active_steps():
-		var r := Rect2(-half, step_top_y(k), step_size, step_size)
+		var r := Rect2(-half_w, step_top_y(k), step_width, step_length)
 		if solid:
 			draw_rect(r, STEP_SOLID)
 			draw_rect(r, STEP_EDGE, false, 1.0)
@@ -264,7 +270,7 @@ func _draw() -> void:
 			# "一块只是没填色的实心砖"，那正是 D47 那版 A 皮肤被裁掉的原因（D48）。
 			_fade_rect(r.position.x, r.position.y, r.end.x, r.end.y, GHOST_TOP, GHOST_BOTTOM)
 			# 尾迹比身体窄一档，免得整列连成一根柱子、读不出格的边界
-			_fade_rect(r.position.x + 5.0, r.position.y - step_size, r.end.x - 5.0, r.position.y,
+			_fade_rect(r.position.x + 5.0, r.position.y - step_length, r.end.x - 5.0, r.position.y,
 				Color(0.0, 0.0, 0.0, 0.0), TAIL_NEAR)
 			draw_rect(Rect2(r.position.x, r.position.y, r.size.x, 1.0), TREAD_LINE)
 	_draw_housing()
@@ -274,7 +280,7 @@ func _draw() -> void:
 	draw_line(Vector2(0.0, reach), Vector2(0.0, 0.0), GUIDE, 1.0)
 	for k in active_steps():
 		var y := float(k) * pitch()
-		draw_line(Vector2(-half - 6.0, y), Vector2(half + 6.0, y), GUIDE_LIP, 1.0)
+		draw_line(Vector2(-half_w - 6.0, y), Vector2(half_w + 6.0, y), GUIDE_LIP, 1.0)
 
 
 ## 竖向渐变矩形：上边 `top`、下边 `bottom`，中间按顶点色插值。

@@ -721,7 +721,7 @@ func _test_afterimage() -> void:
 		tops30.append(emitter.step_top_y(k))
 	var drift := 0.0
 	for k in active:
-		drift = maxf(drift, absf(rungs[k].position.y - (tops30[k] + emitter.step_size * 0.5)))
+		drift = maxf(drift, absf(rungs[k].position.y - (tops30[k] + emitter.step_length * 0.5)))
 	_check("流 30 拍后逐格位置仍等于公式值（最大偏差 %s px）" % str(drift), drift < 0.01)
 
 	TimeManager.notify_movement_intent(true)
@@ -836,7 +836,8 @@ func _afterimage_instance(rig: Node, at: Vector2) -> AfterimageEmitter:
 	# 进树前赋好，`_ready()` 的 `_rebuild()` 才按这档建池子。
 	emitter.fall_speed = 400.0
 	emitter.emit_interval = 0.20
-	emitter.step_size = 32.0
+	emitter.step_width = 32.0
+	emitter.step_length = 32.0
 	emitter.reach = 320.0
 	emitter.max_steps = 8
 	rig.add_child(emitter)
