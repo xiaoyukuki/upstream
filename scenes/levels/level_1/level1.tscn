@@ -96,7 +96,6 @@ tile_map_data = PackedByteArray("AABgAD4AAAABAAMAAABbAD4AAAADAAMAAABcAD4AAAADAAM
 tile_set = SubResource("TileSet_0mr74")
 
 [node name="Player" parent="." unique_id=1096430809 instance=ExtResource("5_nfihu")]
-z_index = 1
 position = Vector2(96, -130)
 jump_velocity = -400.0
 
