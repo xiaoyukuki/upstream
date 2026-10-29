@@ -18,7 +18,7 @@ extends Area2D
 signal pressed_changed(pressed: bool)
 
 ## 面板宽度，同时也是触发带宽度。
-@export var width: float = 64.0:
+@export var width: float = 48.0:
 	set(value):
 		width = value
 		_rebuild()
