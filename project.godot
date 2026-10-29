@@ -21,6 +21,7 @@ config/icon="res://icon.svg"
 MCPRuntimeProbe="*uid://bsg12huaf1u5i"
 TimeManager="*res://autoloads/time_manager.gd"
 Musicplayer="*uid://bnid6f1pgnj6t"
+AudioDirector="*res://autoloads/audio_director.gd"
 
 [debug]
 

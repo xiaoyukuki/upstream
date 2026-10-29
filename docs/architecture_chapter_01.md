@@ -2613,3 +2613,37 @@ B 的代价在选型图那行字里就写明了：**屏幕上一共三个青的�
 **留给耳朵与人眼的三条**：① BGM 到底响没响、起的那一拍是不是"睁眼"那一拍而不是"最后一发泡破"那一拍（无头只能证调用点）；② 呼吸 ±6 px 在实机上读起来是"似醒非醒"还是"在闪"；③ 亮区 80 这一档在出生点周围**真有内容**的关上够不够"看不清周围"，还是要重开选型图挑一档（②③④ 那三档 140/240 就在选型图上，重挑只改清单）。
 
 **编号**：本节点用掉 **D78**（D33 仍是留空号），**下一个空号 D79**。
+
+---
+
+### D79 · 世界冻结时把 BGM 的高频压下去：一条低通挂专属总线，斜坡吃真实时间
+
+**起因（2026-10-29）**：他提「我希望在时间冻结的时候削弱BGM的高频，但我不知道在Godot里有没有办法实现，分析一下可行性」。先只交可行性分析（本项目"先出结构再写代码"那条），分析里给的是探针读数不是印象；他回「按这个来，之后我再自己调整数值」⇒ **数值做成导出项，留给耳朵定，代码只钉结构**。
+
+**Godot 4.6 的音频 API 是探出来的，不是查出来的（一版分析里有三处是错的，探针逐条打掉）**：① `AudioEffectFilter` 上**没有** `mode` 属性 —— 4.6 是「一族各一个类」（`AudioEffectLowPassFilter` / `HighShelfFilter` / `LowShelfFilter` / `BandLimit` / `BandPass` / `Notch`），写 `effect.mode = …` 直接 `Invalid access to property`；② `AudioServer.set_bus_effect_parameter()` **在 4.x 不存在**（解析期就报 `Static function not found`，脚本整个不起）；③ `AudioEffect.set_parameter()` 同样不存在（`Nonexistent function`）。**改参数只有一条路：直接写属性**（`effect.cutoff_hz = 1800.0`，读回 1800.0、`resonance`/`gain` 同理，30 步扫整条曲线读回逐拍对得上）。启动时总线表只有 `Master` 一条，项目里**没有** bus layout 资产（`project.godot` 里一条 `audio/*` 设置都没有）⇒ 总线只能运行时建，`add_bus` / `set_bus_name` / `set_bus_send` / `add_bus_effect` / `get_bus_effect` 在无头下全部可用。
+
+**结构**：新 autoload `autoloads/audio_director.gd`（排在 `Musicplayer` 之后）。`_ready()` 里建 `Music` 总线（已存在就认领、不建第二条）→ 挂一条 `AudioEffectLowPassFilter`（已有一条就复用，否则每启动一次叠一层，听感对不上任何一次试听）→ 把 `/root/Musicplayer.bus` 指过去；然后连 `TimeManager.state_changed`，**只记"冻没冻"这一个布尔**，不按 `TimeState` 的枚举值硬解（枚举哪天重排，"闷/不闷"会整个反掉而没有任何报错）。`_process(delta)` 里 `move_toward` 到目标切点，`ramp_seconds` 为 0 时一步跳到位（那就是"硬切"）。默认 **20500 → 1200 Hz / 0.15 s**：20.5 kHz 贴着 44.1 kHz 的奈奎斯特频率，等于全开，所以这条效果一直挂着、不需要开开关关。
+
+**为什么是独立总线而不是 Master**：Master 将来要走音效，闷掉整条 master 等于连死亡/落地声一起闷。今天项目里只有 BGM 一条声源，所以两种接法**听不出差别** —— 这一条买的是不返工。
+
+**为什么斜坡不能用 `TimeManager.get_process_delta()`**：那个量在冻结期间返回 0，斜坡会永远停在起点，**声音一点没闷，而任何地方都不报错**（这是本项目最怕的那类绿）。`_process(delta)` 拿到的就是真实 delta：项目从不碰 `Engine.time_scale`、也从不 `get_tree().paused`，所以"冻结期间 `_process` 照常跑"这条前提是稳的（撒坏那轮实测：换成世界 delta 之后 20500 → 20500，三条行为判据一起红）。
+
+**三个"不报错"的坑，全改成了判据**：
+① **不存在的总线名会静默回退**。`player.bus = &"Music"` 在 Music 还没建时读回来是 `Master`，**没有 warning 也没有 error**；而总线后来建出来，同一个 player 又会自己跟上（用 `Ghost` / `Phantom` 两个名字各复现一次；不在树里赋值、先建后赋都一样）。于是"我写过那一行"完全不能当证据 —— 守门读的是 `player.bus` 的**读回值**。
+② **autoload 顺序**。`AudioDirector` 排在 `Musicplayer` 前面，它 `_ready` 时 `/root/Musicplayer` 还不存在，路由那一行静默落空（所以 `project.godot` 的先后本身是一条判据）。
+③ **autoload 标识符在 `--script` 下编译不过**（`level_base.gd` 那条坑的同一条），而 `verify_kit` 就是 `--script` 跑的 —— 脚本本体一律走 `get_node_or_null("/root/…")`，连静态判据也钉了这一点。
+
+**还踩到一个只在这一件构件上出现的坑**：`verify_kit` 的 `SCRIPTS` 清单会对每个脚本 `script.reload()`，而 autoload 在进程里**活着一个实例** ⇒ `ERROR: Cannot reload script while instances exist`（引擎 ERROR 就算红）。所以 `audio_director.gd` **刻意不进**那个清单：它编译不出来的话那条 autoload 根本起不来，"启动之后有没有 Music 总线 / 总线上第一条是不是低通"这些**读真实状态**的判据会当场响，覆盖得比 reload 更实。
+
+**守门**：`verify_kit._verify_audio()` —— 静态四类（时基禁令 `elapsed_world_time`/`get_physics_delta`/`get_process_delta`/`Engine.time_scale`；标识符禁令 `TimeManager.`/`Musicplayer.`；必须走 `/root/TimeManager` 与 `/root/Musicplayer`；必须有 `_process`）+ `project.godot` 登记与先后 + **读启动后真实状态**三条（`Music` 总线在、第一条是低通、`player.bus` 读回 == Music）。`kit_selftest` 第 28 组 12 条：总线与路由落地、开放档在冻结档之上、起步停在开放档、**前置"世界确实冻住了"**（不然"冻着还在爬"可以因为压根没冻而假绿）、冻着斜坡照样爬、半路严格夹在两端之间（这条抓硬切）、冻结档精确收敛、解冻回开放档、再建一次不多总线、不叠第二条低通。
+
+**破坏性对照（七轮，全部当场红、复原照绿，两个文件 md5 逐轮比对）**：
+① 斜坡换成世界 delta ⇒ `verify_kit` 静态那条红 + 第 28 组三条一起红（`20500 -> 20500`、半路那值 20500、收敛等了 300 拍还没到）；② 删掉 `player.bus = MUSIC_BUS` ⇒ 「Musicplayer 读回来挂在 Master 上」；③ `move_toward` 的步长去掉 `× delta`（硬切）⇒ **只**红"半路严格夹在两端之间"（读到 1200 ∈ (1200, 20500)），"冻着还在爬"那条照样过 —— 说明这两条分工是准的；④ 挂 `HighShelfFilter` 冒充低通 ⇒ 两个守门各红一条；⑤ 复用循环里的 `return` 改成 `break` ⇒ 「低通 2 条」；⑥ autoload 挪到 `Musicplayer` 前面 ⇒ 「排在 Musicplayer 前面…路由那一行静默落空」；⑦ 整条 autoload 删掉 ⇒ 「没有 AudioDirector 这条 autoload」+「启动之后没有 Music 总线」两条。
+
+**读数（第 28 组，ramp 临时拉到 2 s 好让半路量得到，测完原样还回去）**：冻住后 3 拍 20500 → 20045（世界 `is_time_frozen=true`）；收敛到 1200.00 用了 117 拍；解冻后回到 20500.00 用了 124 拍（多出来的那几拍正是 `TimeManager` 那 0.08 s 解冻缓冲 —— "世界先动、声音后回来"，留着）。
+
+**契约变更**：`project.godot` 多一条 autoload；运行时多一条 `Music` 总线；`Musicplayer` 挂到它上面（不再是 Master）；`TimeManager` 零变更、关卡作者零变更、`run_state` 零变更。
+
+**留给他自己调的三个数**（都是 `@export`，运行时在 Remote 检查器里改立刻生效，下一拍就是新目标）：`open_cutoff_hz` / `frozen_cutoff_hz` / `ramp_seconds`。**只能靠耳朵定的三条**：① 1200 这一档是"闷"还是"糊"（再往下走到 400 上下曲子会同时变小声）；② 0.15 s 够不够盖住硬切那一声"咚"；③ 死亡那一拍与能力授予那一拍也跟着闷（它们走同一个 `state_changed`）到底对不对 —— 要分开只能读 `is_frozen_overridden()`，而架构文档明写玩法代码不该读它，所以这一条等实听再裁。
+
+**编号**：本节点用掉 **D79**（D33 仍是留空号），**下一个空号 D80**。

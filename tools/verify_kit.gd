@@ -34,6 +34,9 @@ const SCRIPTS := [
 	"res://scenes/levels/level_template.gd",
 	"res://scenes/levels/main.gd",
 ]
+# audio_director.gd 刻意不在：它是 autoload，进程里活着一个实例，`script.reload()` 会报
+# "Cannot reload script while instances exist"（引擎 ERROR 就算红）。它编译不出来的话
+# 那条 autoload 根本起不来，下面 `_verify_audio()` 那些**读启动后真实状态**的判据会当场响。
 # tile_draw.gd 刻意不在：它 extends RefCounted，下面的 instance.free() 对它不成立，
 # 且它没有状态可验 —— 作为 Spikes/ElectricBar/KeyDoor 的 preload 已被连带编译。
 
@@ -194,6 +197,9 @@ const HAZARD_BASE_SCRIPT := "res://components/hazard_base.gd"
 const ANCHOR_GROUP: StringName = &"anchorable"
 ## 关卡脚本的共同祖先，用来「这是不是一个真关卡」而不是靠文件名猜。
 const LEVEL_BASE_SCRIPT := "res://scenes/levels/level_base.gd"
+## 冻结时压掉 BGM 高频的那条低通（D79）。它是 autoload，所以下面那一节的判据
+## 有一半读的是**启动之后**的真实状态，而不是 .tscn 里存了什么。
+const AUDIO_DIRECTOR_SCRIPT := "res://autoloads/audio_director.gd"
 
 const BAND_CENTRE := -15.0
 
@@ -297,6 +303,7 @@ func _process(_delta: float) -> bool:
 	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
+	_verify_audio()
 	# 检查空转比检查失败更糟：门数一旦对不上，说明上面的递归没走到门。
 	if _doors_checked < 2:
 		_fail("只查到 %d 扇门配了接线（期望至少 2：引导关 + 模板）" % _doors_checked)
@@ -2474,3 +2481,58 @@ func _fold_rel_path(node_path: String, rel: NodePath) -> String:
 	base.append_array(steps)
 	return "/".join(base)
 
+
+## 冻结时压掉 BGM 高频（D79）。这条链上全是"写歪了不报错"的接缝，逐段钉：
+## ① 时基 —— 拿世界 delta 做斜坡，冻结那一拍斜坡就永远停在起点（声音一点没闷），无头全绿；
+## ② 路由 —— 给一个还不存在的总线名赋值会**静默回退成 Master**，不报错也不警告，
+##    于是 BGM 照样在放、滤镜一点没生效，而任何地方都不响；
+## ③ autoload 顺序 —— AudioDirector 排在 Musicplayer 前面，它 `_ready` 时那个节点还不存在；
+## ④ `--script` 模式下 autoload 标识符编译不过（同 level_base 那条坑），所以脚本体只许走 /root 路径。
+## 行为那半边（冻结时真的往下爬、不是硬切、解冻回开放档）归 kit_selftest 第 28 组。
+func _verify_audio() -> void:
+	var src := _code_only(FileAccess.get_file_as_string(AUDIO_DIRECTOR_SCRIPT))
+	if src.is_empty():
+		_fail("读不到 %s" % AUDIO_DIRECTOR_SCRIPT)
+		return
+	for banned in ["elapsed_world_time", "get_physics_delta", "get_process_delta", "Engine.time_scale"]:
+		if src.contains(banned):
+			_fail("AudioDirector 里出现了 %s：斜坡必须吃真实时间 —— 世界时间在冻结时是 0，" % banned +
+				"斜坡会停在起点，声音一点没闷而无头全绿（D79）")
+	for banned in ["TimeManager.", "Musicplayer."]:
+		if src.contains(banned):
+			_fail("AudioDirector 里出现了 %s：--script 模式下 autoload 标识符编译不过，" % banned +
+				"而 verify_kit 就是 --script 跑的，只能走 /root 路径（D79）")
+	if not src.contains("\"/root/TimeManager\""):
+		_fail("AudioDirector 没走 /root/TimeManager 取节点：它读不到冻结状态，低通永远停在开放档（D79）")
+	if not src.contains("\"/root/Musicplayer\""):
+		_fail("AudioDirector 没走 /root/Musicplayer 取节点：没有人把 BGM 送到 Music 总线上（D79）")
+	if not src.contains("func _process("):
+		_fail("AudioDirector 没有 _process：斜坡没有地方落地 —— 冻结期间它必须照样往前爬（D79）")
+
+	var project := FileAccess.get_file_as_string("res://project.godot")
+	var music_at := project.find("Musicplayer=\"*uid://")
+	var audio_at := project.find("AudioDirector=\"*res://autoloads/audio_director.gd\"")
+	if audio_at < 0:
+		_fail("project.godot 里没有 AudioDirector 这条 autoload：整条低通不进进程（D79）")
+	elif music_at < 0:
+		_fail("project.godot 里找不到 Musicplayer 那条 autoload：下面那条顺序判据没法验（D79）")
+	elif audio_at < music_at:
+		_fail("AudioDirector 排在 Musicplayer 前面：它 _ready 时 /root/Musicplayer 还不存在，" +
+			"路由那一行静默落空（D79）")
+
+	# 下面这几条读的是**启动之后**的真实状态：无头下 AudioServer 照样有总线表，
+	# 所以"建没建、挂没挂、路由到没到"这三件事不用开窗也量得到。
+	var bus := AudioServer.get_bus_index("Music")
+	if bus < 0:
+		_fail("启动之后没有 Music 总线：AudioDirector 建总线那一段没走到 —— 而 BGM 照样在放、" +
+			"没有任何报错，这是最坏的一种绿（D79）")
+		return
+	if AudioServer.get_bus_effect_count(bus) < 1 \
+			or not (AudioServer.get_bus_effect(bus, 0) is AudioEffectLowPassFilter):
+		_fail("Music 总线上第一条不是低通：整条效果等于不存在（D79）")
+	var player := root.get_node_or_null("/root/Musicplayer") as AudioStreamPlayer
+	if player == null:
+		_fail("拿不到 /root/Musicplayer：路由那一半没法验（D79）")
+	elif player.bus != "Music":
+		_fail("Musicplayer 读回来挂在 %s 上（应为 Music）：总线不存在时赋名会静默回退 Master，" % str(player.bus) +
+			"声音照样放、滤镜一点没生效，而任何地方都不报错（D79）")

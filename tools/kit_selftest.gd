@@ -300,6 +300,7 @@ func _ready() -> void:
 	await _test_cave_cover()
 	await _test_dream_bubbles()
 	await _test_dream_mask()
+	await _test_audio_lowpass()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -3240,6 +3241,87 @@ func _test_dream_mask() -> void:
 	await _frame(1)
 	real_music.name = &"Musicplayer"
 	TimeManager.reset_state()
+
+
+## 第 28 组：冻结时压掉 BGM 的高频（D79）。无头听不见声音，量得到的是**参数动没动**，
+## 所以这一组钉的是这条链上的每一道接缝：
+## ① 启动之后总线与路由真的落地 —— 给一个还不存在的总线名赋值会静默回退成 Master，
+##    不报错也不警告，于是 BGM 照样在放、滤镜一点没生效；
+## ② 斜坡吃的是**真实时间**：世界冻着那一段它照样往前爬（换成世界 delta 会停在起点，
+##    声音一点没闷，而这一组照样绿）—— 所以先把"世界真的冻住了"当成前置单独钉一条；
+## ③ 不是硬切：半路上读到一个严格夹在两端之间的值；
+## ④ 两头都停得准：冻结档精确收敛到 `frozen_cutoff_hz`、解冻后精确回到 `open_cutoff_hz`
+##    （中间那 0.08 s 解冻缓冲照旧起作用，所以回程是等出来的，不是当帧就到的）；
+## ⑤ 幂等：再走一次建总线那段，不会多出一条总线、也不会在总线上叠第二条低通。
+func _test_audio_lowpass() -> void:
+	TimeManager.reset_state()
+	await _frame(2)
+	var director := get_node_or_null("/root/AudioDirector")
+	if director == null:
+		_check("拿得到 /root/AudioDirector（拿不到则这一整组是空的）", false)
+		return
+	var bus := AudioServer.get_bus_index("Music")
+	_check("启动之后有 Music 总线（bus=%d）" % bus, bus >= 0)
+	if bus < 0:
+		return
+	var effect := AudioServer.get_bus_effect(bus, 0) if AudioServer.get_bus_effect_count(bus) > 0 else null
+	_check("Music 总线上第一条是低通", effect is AudioEffectLowPassFilter)
+	if not (effect is AudioEffectLowPassFilter):
+		return
+	var player := get_node_or_null("/root/Musicplayer") as AudioStreamPlayer
+	_check("Musicplayer 读回就是 Music（不是静默回退的 Master）",
+		player != null and player.bus == &"Music")
+
+	var open_hz: float = director.get(&"open_cutoff_hz")
+	var frozen_hz: float = director.get(&"frozen_cutoff_hz")
+	_check("开放档在冻结档之上（%.0f > %.0f）" % [open_hz, frozen_hz], open_hz > frozen_hz)
+
+	# 斜坡拉长到 2 s：半路那一下才量得到。测完原样还回去。
+	var ramp_was: float = director.get(&"ramp_seconds")
+	director.set(&"ramp_seconds", 2.0)
+	await _frame(2)
+	var before: float = AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")
+	_check("起步时停在开放档（%.0f）" % before, is_equal_approx(before, open_hz))
+
+	TimeManager.set_ability_enabled(true)
+	TimeManager.notify_movement_intent(true)
+	await _frame(3)
+	var mid: float = AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")
+	_check("前置：世界确实冻住了（is_time_frozen=%s）" % str(TimeManager.is_time_frozen()),
+		TimeManager.is_time_frozen())
+	_check("世界冻着，斜坡照样往前爬（%.0f -> %.0f）" % [before, mid], mid < before)
+	_check("半路上严格夹在两端之间（%.0f ∈ (%.0f, %.0f)）" % [mid, frozen_hz, open_hz],
+		mid > frozen_hz and mid < open_hz)
+
+	var guard := 0
+	while float(AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")) > frozen_hz and guard < 300:
+		guard += 1
+		await _frame(1)
+	var landed: float = AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")
+	_check("冻结档收敛到 frozen_cutoff_hz（%.2f，等了 %d 拍）" % [landed, guard],
+		is_equal_approx(landed, frozen_hz))
+
+	TimeManager.notify_movement_intent(false)
+	guard = 0
+	while float(AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")) < open_hz and guard < 600:
+		guard += 1
+		await _frame(1)
+	var back: float = AudioServer.get_bus_effect(bus, 0).get(&"cutoff_hz")
+	_check("解冻后回到开放档（%.2f，等了 %d 拍）" % [back, guard], is_equal_approx(back, open_hz))
+
+	director.call(&"_build_bus")
+	_check("再走一次建总线不会多出一条（bus=%d）" % AudioServer.get_bus_index("Music"),
+		AudioServer.get_bus_index("Music") == bus)
+	var lows := 0
+	for i in AudioServer.get_bus_effect_count(bus):
+		if AudioServer.get_bus_effect(bus, i) is AudioEffectLowPassFilter:
+			lows += 1
+	_check("再走一次也不会在总线上叠第二条低通（低通 %d 条）" % lows, lows == 1)
+
+	director.set(&"ramp_seconds", ramp_was)
+	TimeManager.reset_state()
+	await _frame(2)
+
 
 ## 相位器件 fixture：`period/duty/phase` 必须在进树前赋好 —— `_ready()` 里那次
 ## `_apply_state(cycle_on())` 就是按这一档决定开局站在哪一头。
