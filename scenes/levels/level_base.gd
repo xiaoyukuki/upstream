@@ -28,13 +28,20 @@ extends Node2D
 ## 节点改名或挪层级，在检查器里重指即可，不用回来改脚本。路径解析不到就静默跳过，
 ## 这样「本关没有祭坛」是一个合法配置而不是报错。
 
+## 梦泡那一拍的构件（D77）。按路径 load 不 preload：静态引用会让关卡基类在编译期
+## 依赖一个只在开局那一拍才用得上的场景。
+const DREAM_BUBBLES_SCENE := "res://scenes/objects/dream_bubbles/dream_bubbles.tscn"
+
 ## M1 沙盒置 true 以便直接测试时停手感；M2 引导关必须置 false，能力在祭坛处才授予。
-@export var start_with_ability: bool = true
-## 时间锚点（D73）：**另一项能力，与上面那条互不蕴含**。测试期它没有授予路径 ——
+@export var start_with_ability: bool = true## 时间锚点（D73）：**另一项能力，与上面那条互不蕴含**。测试期它没有授予路径 ——
 ## 祭坛不写它、`run_state` 不记它，只有关卡根这一处写，所以这一格就是它唯一的开关。
 ## 只勾这条不勾上面那条：世界照样流动，锚点物仍然"我按着它才走"，但看不到
 ## "世界停了它还在走"那层对照（那是上一项能力给的背景，不是这一项的机制）。
 @export var start_with_anchor: bool = false
+## 梦泡新手引导（D77）：开局那一拍先钉在睡姿上，等玩家把头顶四只泡按破才醒。
+## 开关住在关卡根，与上面那条 `start_with_anchor` 同一形状：入口只有一处、不藏进构件。
+## 它不改"演不演"这件事（那归常驻根的 `take_intro()`，每进程一次），只改"那一拍怎么演"。
+@export var dream_intro: bool = true
 
 ## 取景框：position=左上角世界坐标，size=可见范围。留空（size 为 0）则沿用
 ## player.tscn 里的兜底 limits。相机归关卡管，换关才不会互相穿帮（D15）。
@@ -74,6 +81,10 @@ var _death_pending: bool = false
 var _active_checkpoint: Node
 ## 玩家本体的缓存（本来只为 D16 那条「松手了没」而取，D62 起同一拍还要问他「那一拍演完没」）。
 var _player: Player
+## 场上那一串梦泡（D77）。`null` = 这一关这一拍没演过（或已经演完撤掉）。
+## 它同时是"这一拍里不许判死"那条例外的凭据：人在钉住的睡姿上，危险物照样能杀他，
+## 而"引导演到一半人没了、且这一世不再演"（`take_intro()` 已经消费掉）是最难查的一种死法。
+var _dream: Node = null
 ## 上一次轮询时 `is_granting()` 的值。存的是**下降沿**而不是「存过了」那个布尔：
 ## 这一发要认的是「那一拍演完了」这件事，而它只可能发生一次（祭坛一次性）。
 var _grant_was_running: bool = false
@@ -146,8 +157,31 @@ func _maybe_intro() -> void:
 	if not bool(root.call(&"take_intro")):
 		return
 	var player: Player = get_tree().get_first_node_in_group(&"player")
-	if player != null:
+	if player == null:
+		return
+	if not dream_intro:
 		player.begin_wake()
+		return
+	# 梦泡那一拍（D77）：把苏醒窗口钉住，等四只泡按破。掐输入复用 D57 那把现成的锁，
+	# 不另起第二套掐法；"醒"仍然只有 `begin_wake()` 那一条路径（见 `_on_dream_completed`）。
+	player.begin_wake_hold()
+	var bubbles: Node = load(DREAM_BUBBLES_SCENE).instantiate()
+	add_child(bubbles)
+	_dream = bubbles
+	# 按信号名连（与 `_bind_altar` 同一口径）：基类不在编译期依赖那个构件的类型。
+	bubbles.connect(&"completed", _on_dream_completed)
+
+
+## 四只泡全破完：交回现成的 2.45 s 苏醒窗口，然后把这一拍从场上撤掉。
+## 撤而不是留着不动 —— 它已经发过 `completed`，留在那儿只会让人以为还能再按。
+func _on_dream_completed() -> void:
+	var player: Player = _player if _player != null \
+		else get_tree().get_first_node_in_group(&"player")
+	if player != null:
+		player.release_wake()
+	if _dream != null:
+		_dream.queue_free()
+		_dream = null
 
 
 ## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子；
@@ -359,6 +393,10 @@ func _on_goal_body_entered(_body: Node2D) -> void:
 ## 同一拍里第二根危险物再点一次名也被 `_dying` 挡下 —— 死亡不叠加，只演一遍。
 func _on_hazard_touched(target: Node2D) -> void:
 	if _dying or _death_pending:
+		return
+	# 梦泡那一拍里不判死（D77）。人是钉住的，而 `take_intro()` 在开局那一帧就已经被消费掉 ——
+	# 演到一半死掉等于把新手引导整个丢掉，且**这一世不再重演**，症状长得像"引导坏了"。
+	if _dream != null:
 		return
 	var player: Player = target as Player
 	if player == null:

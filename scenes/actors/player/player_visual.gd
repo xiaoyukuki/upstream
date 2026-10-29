@@ -53,6 +53,15 @@ func _process(delta: float) -> void:
 		if is_playing():
 			pause()
 		return
+	# 梦泡那一拍（D77）：皮钉在 wake 第 0 帧 = 睡姿。这条早退必须排在下面那句
+	# 「没在播就 play」之前，否则它每一帧都把刚按住的剪辑放开。wake 剪辑不循环，
+	# 任它自己走完就停在末帧（= idle 第 0 帧）—— 那是一张已经醒完的脸。
+	if _player.is_wake_held():
+		if animation != &"wake":
+			play(&"wake")
+		set_frame_and_progress(0, 0.0)
+		pause()
+		return
 	if not is_playing():
 		play()
 	_land_remaining = maxf(0.0, _land_remaining - delta)

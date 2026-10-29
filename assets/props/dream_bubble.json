@@ -1,0 +1,46 @@
+{
+  "style": "F 暗底白边白字",
+  "states": 4,
+  "radius": 56,
+  "arc_origin_y": -5,
+  "bubbles": [
+    {
+      "action": "move_left",
+      "part": "a",
+      "deg": 160
+    },
+    {
+      "action": "move_down",
+      "part": "s",
+      "deg": 120
+    },
+    {
+      "action": "jump",
+      "part": "space",
+      "deg": 60
+    },
+    {
+      "action": "move_right",
+      "part": "d",
+      "deg": 20
+    }
+  ],
+  "parts": {
+    "a": [
+      22,
+      22
+    ],
+    "s": [
+      22,
+      22
+    ],
+    "space": [
+      38,
+      22
+    ],
+    "d": [
+      22,
+      22
+    ]
+  }
+}

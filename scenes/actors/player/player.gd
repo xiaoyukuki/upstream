@@ -267,6 +267,27 @@ func begin_wake() -> void:
 	movement_locked = true
 
 
+## 梦泡那一拍（D77）：把上面那个窗口**钉住不释放**，等四只泡按破。`INF` 不是哨兵值而是
+## 真的"减不完"—— `maxf(0.0, INF - delta)` 恒为 INF，所以既有那条计时链一字不改就能一直掐着输入，
+## 而"醒"这件事从头到尾只有一条路径（`release_wake()` 之后照常走那 2.45 s）。
+func begin_wake_hold() -> void:
+	_wake_remaining = INF
+	movement_locked = true
+
+
+## 皮读它决定"钉在第 0 帧还是让它自己走"。wake 剪辑不循环，任它自己走完就停在末帧
+## （= idle 第 0 帧）—— 那是一张已经醒完的脸，而这一拍要演的恰恰是"还没醒"。
+func is_wake_held() -> bool:
+	return _wake_remaining == INF
+
+
+## 四只泡全破完那一拍由关卡根叫：交回现成的苏醒窗口，时长仍只住 `WAKE_SECONDS` 一处。
+func release_wake() -> void:
+	if not is_wake_held():
+		return
+	_wake_remaining = WAKE_SECONDS
+
+
 ## 皮读它决定播不播 wake 剪辑，守门也读它。苏醒期间人不移动，所以世界照常流动 ——
 ## 这一拍与"冻结"无关，只与"他还没醒"有关。
 func is_waking() -> bool:
