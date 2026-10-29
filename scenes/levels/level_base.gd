@@ -150,26 +150,42 @@ func _set_player_start(pos: Vector2) -> void:
 ## F6 直跑关卡场景时这里整条不在场（`_world_root()` 返回 null），演不演都不问：摆图的人不该被这一拍挡路。
 ## 与 `_apply_run_state()` 同一条口径：能力由 `_world_root()` 那道闸认过，这里就直接 call，
 ## 不另补一遍 has_method —— 那条按名字读的契约由 verify_kit 的 METHODS 钉住。
+##
+## D78 起这一拍还兼"音乐什么时候起"：**苏醒之前不放 BGM**，所以 `Musicplayer` 的
+## `autoplay` 已改成 false，起播点就在"苏醒窗口开始那一拍"。这一发只有三个出口，
+## 每个出口都写明白了它等不等：不演开场 → 立刻；演但不钉住（`dream_intro=false`）→ 窗口
+## 从这一拍就开始 → 立刻；演且钉住（梦泡）→ 等 `_on_dream_completed()` 那一发。
 func _maybe_intro() -> void:
 	var root := _world_root()
-	if root == null:
+	if root != null and bool(root.call(&"take_intro")):
+		var player: Player = get_tree().get_first_node_in_group(&"player")
+		if player != null:
+			if dream_intro:
+				# 梦泡那一拍（D77）：把苏醒窗口钉住，等四只泡按破。掐输入复用 D57 那把现成的锁，
+				# 不另起第二套掐法；"醒"仍然只有 `begin_wake()` 那一条路径（见 `_on_dream_completed`）。
+				player.begin_wake_hold()
+				var bubbles: Node = load(DREAM_BUBBLES_SCENE).instantiate()
+				add_child(bubbles)
+				_dream = bubbles
+				# 按信号名连（与 `_bind_altar` 同一口径）：基类不在编译期依赖那个构件的类型。
+				bubbles.connect(&"completed", _on_dream_completed)
+				return
+			player.begin_wake()
+	_start_music()	# 走到这儿 = 这一关不演"钉住的梦"，音乐没有要等的东西
+
+
+## BGM 的唯一起点（D78）。**幂等**：死亡重载与按 R 都会再走一次 `_maybe_intro()`，
+## 那时窗口早就演过了，音乐不该跟着从头再来一遍。
+## 走路径取节点而不是写 `Musicplayer` 那个标识符 —— `--script` 模式下 autoload 的**节点**
+## 在 `/root` 上、**标识符却编译不过**（2026-10-29 探针），而 `verify_kit` 会 load 本脚本，
+## 写死标识符等于把守门自己弄红。
+func _start_music() -> void:
+	var music := get_node_or_null("/root/Musicplayer")
+	if music == null:
 		return
-	if not bool(root.call(&"take_intro")):
+	if bool(music.get(&"playing")):
 		return
-	var player: Player = get_tree().get_first_node_in_group(&"player")
-	if player == null:
-		return
-	if not dream_intro:
-		player.begin_wake()
-		return
-	# 梦泡那一拍（D77）：把苏醒窗口钉住，等四只泡按破。掐输入复用 D57 那把现成的锁，
-	# 不另起第二套掐法；"醒"仍然只有 `begin_wake()` 那一条路径（见 `_on_dream_completed`）。
-	player.begin_wake_hold()
-	var bubbles: Node = load(DREAM_BUBBLES_SCENE).instantiate()
-	add_child(bubbles)
-	_dream = bubbles
-	# 按信号名连（与 `_bind_altar` 同一口径）：基类不在编译期依赖那个构件的类型。
-	bubbles.connect(&"completed", _on_dream_completed)
+	music.call(&"play")
 
 
 ## 四只泡全破完：交回现成的 2.45 s 苏醒窗口，然后把这一拍从场上撤掉。
@@ -182,6 +198,8 @@ func _on_dream_completed() -> void:
 	if _dream != null:
 		_dream.queue_free()
 		_dream = null
+	# 音乐与"他睁开眼"同一拍起（D78）：遮罩开始张开那一发，不是窗口走完那一发。
+	_start_music()
 
 
 ## 回灌 run_state（D31）：存档点覆盖出生位；祭坛已耗则能力直接开启、祭坛摆成已耗的样子；

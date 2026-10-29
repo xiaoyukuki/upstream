@@ -1,0 +1,25 @@
+{
+  "style": "g",
+  "radius": 80.0,
+  "edge_width": 0.45,
+  "cap": 1.0,
+  "open_radius": 366.0,
+  "breath_amplitude": 6.0,
+  "breath_period": 3.2,
+  "arc_origin_y": -5,
+  "corner_radius": 370,
+  "tex_px_per_world_px": 2,
+  "texture": {
+    "file": "res://assets/props/dream_mask.png",
+    "side": 1480,
+    "centre": [
+      740,
+      740
+    ]
+  },
+  "colour": [
+    18,
+    24,
+    40
+  ]
+}

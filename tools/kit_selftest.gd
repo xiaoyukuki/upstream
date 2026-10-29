@@ -299,6 +299,7 @@ func _ready() -> void:
 	await _test_ecg_monitor()
 	await _test_cave_cover()
 	await _test_dream_bubbles()
+	await _test_dream_mask()
 
 	print(TAG, " done failures=%d" % _fails)
 	get_tree().quit(_fails > 0)
@@ -3077,6 +3078,168 @@ func _test_dream_bubbles() -> void:
 	await _frame(2)
 	TimeManager.reset_state()
 
+
+## 假 Musicplayer：无头下 `AudioStreamPlayer.play()` 不会把 `playing` 翻成 true（Dummy 驱动），
+## "有没有声音"永远只能靠耳朵；但"谁在什么时候叫了它、叫了几次"是能在场上证的。
+class MusicSpy extends Node:
+	var playing := false
+	var calls := 0
+	func play() -> void:
+		calls += 1
+		playing = true
+
+
+## 第 27 组：开场遮罩（D78）。这一组钉两件事 ——
+## ① **半径是 `wake_progress()` 的纯函数**：钉住那拍 == 清单基值，窗口走了一半 == 按算式那一档
+##    （把 lerp 短路成常量，这两档就分不出来 —— 所以这里比的是**两档之比**，不是绝对值），
+##    圆心跟的是**玩家**（不是出生点那个常量，也不是"屏心"），窗口走完自己收摊；
+## ② 苏醒之前不放 BGM：钉住这一拍假 Musicplayer 一次都没被叫，四只泡全破那一拍叫**一次**，
+##    再补一发不重播（幂等）；对照组 = 同一份关但 `dream_intro` 那条不演，那里音乐当帧就起。
+## 屏上到底黑成什么样归 tools/dream_mask_shot.tscn（无头看不到渲染）。
+func _test_dream_mask() -> void:
+	TimeManager.reset_state()
+	for stray in get_tree().get_nodes_in_group(&"player"):
+		(stray as Node).queue_free()
+	await _frame(2)
+	var real_music := get_node_or_null("/root/Musicplayer")
+	if real_music == null:
+		_check("拿得到 /root/Musicplayer（拿不到则 ② 整条是空的）", false)
+		return
+	var spy := MusicSpy.new()
+	spy.name = &"Musicplayer"
+	real_music.name = &"Musicplayer__selftest"
+	get_node("/root").add_child(spy)
+
+	var m: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://assets/props/dream_mask.json"))
+	if m == null:
+		_check("读得到遮罩清单（下面几条的期望值全从它来）", false)
+		spy.queue_free()
+		real_music.name = &"Musicplayer"
+		return
+	var r_ref := float(m["radius"])
+
+	var root = _make_world_root()
+	root.intro_enabled = true
+	var mini := _build_mini_level(root)
+	var level: LevelBase = mini["level"]
+	var sleeper: Player = mini["walker"]
+	var mask: Node = load("res://scenes/ui/dream_mask/dream_mask.tscn").instantiate()
+	add_child(mask)
+	await _frame(3)
+	var sprite := mask.get_node("Mask") as Sprite2D
+	_check("钉住那一拍遮罩在场上（visible=%s）" % str(mask.visible), mask.visible)
+	_check("钉住这一拍 BGM 一次都没被叫（calls=%d）—— 他还没睁眼" % spy.calls, spy.calls == 0)
+	var want_off := Vector2(0.0, float(m["arc_origin_y"]))
+	var xform := get_viewport().get_canvas_transform()
+	# 不拿"屏上第几格"当判据：无头那份视口变换不是单位阵（实测把 (3050,-20) 映到 (640,350)），
+	# 把它写进期望值等于把引擎的取景抄第二遍。这里问的是**变换之后仍然成立**的那件事：
+	# 逆变换回来，圆心必须正好落在玩家身上＋清单那个弧心偏移。
+	var back := xform.affine_inverse() * sprite.position
+	_check("圆心逆变换回世界就是玩家身上＋清单弧心偏移（%s 对 %s）" % [str(back), str(sleeper.global_position + want_off)],
+		back.distance_to(sleeper.global_position + want_off) < 0.01)
+	var cam := sleeper.get_node_or_null("PlayerCamera") as Camera2D
+	_check("拿得到玩家那台相机（下面两条圆心判据要按它的取景反算）", cam != null)
+	if cam != null:
+		# 相机自己也在追人（`position_smoothing` 默认开着）。不关掉，"遮罩算它那一拍的取景、
+		# 测试读测试这一拍的取景"就会差出一截 —— 实测差 4.4 世界像素，比判据大两个数量级。
+		cam.position_smoothing_enabled = false
+	var world_before := sleeper.global_position
+	sleeper.set_physics_process(false)	# 只冻这一小段：挪上去的他会一路掉回来
+	sleeper.global_position += Vector2(37.0, -11.0)
+	await _frame(3)
+	var back2 := get_viewport().get_canvas_transform().affine_inverse() * sprite.position
+	# 平移之后**再证一次同一条不变式**：相机是玩家的子节点，他一动屏上位就不动，
+	# 所以"屏上有没有挪"量不到跟不跟人（第一版就是拿它当判据，红在一条本来就该相等的式子上）；
+	# 跟的是**玩家现在的位置**还是出生点那个常量，反算回世界才分得出来。
+	_check("玩家挪过 37 格之后圆心仍然贴着他（反算 %s 对 %s）"
+		% [str(back2), str(sleeper.global_position + want_off)],
+		back2.distance_to(sleeper.global_position + want_off) < 0.01
+		and sleeper.global_position.distance_to(world_before) > 1.0)
+	sleeper.global_position -= Vector2(37.0, -11.0)
+	await _frame(2)
+	# 再把**整关**平移一档：玩家的本地位没动、世界位动了 —— 上面那条挪人的判据分不出
+	# `global_position` 与 `position`（这一份 fixture 里两者相等，实测把构件改成读本地位
+	# 它照样绿），这一条分得出。
+	var world_before_shift := sleeper.global_position
+	level.global_position += Vector2(120.0, -40.0)
+	await _frame(3)
+	var back3 := get_viewport().get_canvas_transform().affine_inverse() * sprite.position
+	_check("整关平移 (120,-40) 之后圆心跟的是玩家的**世界**位（反算 %s 对 %s）"
+		% [str(back3), str(sleeper.global_position + want_off)],
+		back3.distance_to(sleeper.global_position + want_off) < 0.01
+		and sleeper.global_position.distance_to(world_before_shift) > 1.0)
+	level.global_position -= Vector2(120.0, -40.0)
+	sleeper.set_physics_process(true)
+	await _frame(2)
+	var scale_held := sprite.scale.x
+	# 基线那一拍的呼吸相位也要记下来：钉住时半径是 `r_ref + 满幅×sin(这一拍)`，
+	# 拿 `r_ref` 当分母会把这一档 ±6 算进误差里（实测差 2.6%，比判据还大）。
+	var breath_held := float(mask.get("_breath"))
+	var r_held := r_ref + float(m["breath_amplitude"]) * sin(TAU * breath_held / float(m["breath_period"]))
+	_check("钉住那拍拿到了一个可比的基线尺度（%.4f 对基值半径 %.1f）" % [scale_held, r_held],
+		scale_held > 0.0 and absf(r_held - r_ref) <= float(m["breath_amplitude"]) + 0.001)
+
+	for action in [&"move_left", &"move_down", &"jump", &"move_right"]:
+		Input.action_press(action)
+		await _frame(3)
+		Input.action_release(action)
+		await _frame(3)
+	# 最后一发的三帧演完才发 `completed`（D77 口径），所以这里等的是"交回窗口"这件事本身。
+	var released := 0
+	while sleeper.is_wake_held() and released < 60:
+		released += 1
+		await _frame(1)
+	_check("四只泡全破那一拍交回窗口并起乐（等了 %d 拍，held=%s calls=%d）"
+		% [released, str(sleeper.is_wake_held()), spy.calls],
+		not sleeper.is_wake_held() and spy.calls == 1)
+	await _frame(20)
+	var p := sleeper.wake_progress()
+	var breath := float(mask.get("_breath"))
+	var want_r := lerpf(r_ref, float(m["open_radius"]), p) \
+		+ float(m["breath_amplitude"]) * (1.0 - p) * sin(TAU * breath / float(m["breath_period"]))
+	# 比的是**两拍之比**：尺度里那个"屏上 1 世界像素占几格"是取景给的，无头与开窗不一样，
+	# 约掉之后剩下的就是"半径有没有跟着 progress 走"这一件事。
+	var want_ratio := want_r / r_held
+	var got_ratio := sprite.scale.x / scale_held
+	_check("窗口里 progress=%.2f 那拍尺度比 %.3f == 按算式 %.3f" % [p, got_ratio, want_ratio],
+		p > 0.02 and absf(got_ratio - want_ratio) < 0.01)
+	level.call(&"_start_music")
+	_check("再补一发不重播（幂等，calls=%d）" % spy.calls, spy.calls == 1)
+	var waited := 0
+	while sleeper.wake_progress() >= 0.0 and waited < 400:
+		waited += 1
+		await _frame(1)
+	_check("窗口走完（等了 %d 拍，progress=%.1f）" % [waited, sleeper.wake_progress()],
+		sleeper.wake_progress() < 0.0)
+	_check("走完那一拍遮罩自己隐形（visible=%s）" % str(mask.visible), not mask.visible)
+
+	mask.queue_free()
+	mini["level"].queue_free()
+	root.queue_free()
+	await _frame(4)
+	TimeManager.reset_state()
+
+	# —— 对照组：同一份关，但这一关不演钉住的梦 ⇒ 音乐没有要等的东西，进关当帧就该起。
+	#     先把 spy 的 `playing` 清回 false：闸门本身就是问这个才决定叫不叫，
+	#     带着上一段"已经在放"的状态进对照组，那条幂等闩会把它挡掉，测的就不是起点了。
+	var calls_before := spy.calls
+	spy.playing = false
+	var control_root = _make_world_root()
+	control_root.intro_enabled = false
+	var control := _build_mini_level(control_root)
+	await _frame(3)
+	_check("对照关：不演开场 ⇒ 进关当帧就把 BGM 叫起来（calls %d -> %d）"
+		% [calls_before, spy.calls], spy.calls == calls_before + 1)
+	_check("对照关：遮罩不在场（没有苏醒窗口可跟）",
+		control["walker"].wake_progress() < 0.0)
+	control["level"].queue_free()
+	control_root.queue_free()
+	await _frame(2)
+
+	spy.queue_free()
+	await _frame(1)
+	real_music.name = &"Musicplayer"
+	TimeManager.reset_state()
 
 ## 相位器件 fixture：`period/duty/phase` 必须在进树前赋好 —— `_ready()` 里那次
 ## `_apply_state(cycle_on())` 就是按这一档决定开局站在哪一头。

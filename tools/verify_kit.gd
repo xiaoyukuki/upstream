@@ -23,6 +23,7 @@ const SCRIPTS := [
 	"res://scenes/objects/ecg_monitor/ecg_monitor.gd",
 	"res://scenes/objects/cave_cover/cave_cover.gd",
 	"res://scenes/objects/dream_bubbles/dream_bubbles.gd",
+	"res://scenes/ui/dream_mask/dream_mask.gd",
 	"res://components/clock_device.gd",
 	"res://scenes/objects/phase_panel/phase_panel.gd",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.gd",
@@ -84,6 +85,7 @@ const SCENES := [
 	"res://scenes/objects/clock/clock.tscn",
 	"res://scenes/objects/cave_cover/cave_cover.tscn",
 	"res://scenes/objects/dream_bubbles/dream_bubbles.tscn",
+	"res://scenes/ui/dream_mask/dream_mask.tscn",
 	"res://scenes/objects/phase_panel/phase_panel.tscn",
 	"res://scenes/objects/phase_shuttle/phase_shuttle.tscn",
 	"res://scenes/levels/rooms/initial_room.tscn",
@@ -97,7 +99,9 @@ const SCENES := [
 const METHODS := {
 	"res://scenes/levels/main.gd": ["get_run_state", "take_intro", "reload_level", "restart_level"],
 	## 梦泡那一拍的三只闩（D77）：关卡根只问 Player 要这三发，少一发就是"钉不住"或"交不回"。
-	"res://scenes/actors/player/player.gd": ["begin_wake_hold", "is_wake_held", "release_wake"],
+	## `wake_progress`（D78）：遮罩唯一的事实来源，改名就等于遮罩静默不张嘴。
+	"res://scenes/actors/player/player.gd": ["begin_wake_hold", "is_wake_held", "release_wake",
+		"wake_progress"],
 	"res://scenes/objects/dream_bubbles/dream_bubbles.gd": ["popped_count"],
 }
 
@@ -129,6 +133,9 @@ const EXPORTS := {
 }
 
 const NODE_PATHS := {
+	"res://scenes/levels/main.tscn": [
+		"DreamMask", "TimeFreezeFilter", "DebugOverlay", "LevelContainer",
+	],
 	"res://scenes/levels/level_01_tutorial.tscn": [
 		"Objects/ButtonPlate", "Objects/Door", "Objects/PendulumA", "Objects/PendulumB",
 		"Objects/MovingBlock", "Objects/AbilityAltar", "Triggers/GoalZone", "Triggers/BypassZone",
@@ -165,6 +172,12 @@ const CAVE_COVER_SCENE := "res://scenes/objects/cave_cover/cave_cover.tscn"
 const DREAM_SCRIPT := "res://scenes/objects/dream_bubbles/dream_bubbles.gd"
 const DREAM_SCENE := "res://scenes/objects/dream_bubbles/dream_bubbles.tscn"
 const DREAM_MANIFEST := "res://assets/props/dream_bubble.json"
+## 开场遮罩（D78）：与梦泡同一族"皮住在清单 + 磁盘 PNG"的构件，三方对得上是它的命根子。
+const MASK_SCRIPT := "res://scenes/ui/dream_mask/dream_mask.gd"
+const MASK_SCENE := "res://scenes/ui/dream_mask/dream_mask.tscn"
+const MASK_MANIFEST := "res://assets/props/dream_mask.json"
+const MASK_PNG := "res://assets/props/dream_mask.png"
+const FILTER_SCRIPT := "res://scenes/ui/time_freeze_filter.tscn"
 ## 盖子逐格核的是"实心格"，那份坐标来自 tiles.json；合成用的空层也挂这一份图集。
 const LAB_TILESET := "res://assets/tiles/lab_tileset.tres"
 const TILES_MANIFEST := "res://assets/tiles/tiles.json"
@@ -197,6 +210,8 @@ var _anchorables_checked: int = 0
 var _covers_checked: int = 0
 ## 梦泡（D77）：清单里核对过几只就报几只。四只是定死的，所以这里设下限当"扫描没空转"的闸。
 var _dreams_checked: int = 0
+## 遮罩这一拍核了几档（清单↔皮算式那几处交叉）：空转守卫，同 `_dreams_checked` 的口径。
+var _masks_checked: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -278,6 +293,7 @@ func _process(_delta: float) -> bool:
 	_verify_ecg_monitor()
 	_verify_cave_cover()
 	_verify_dream_bubbles()
+	_verify_dream_mask()
 	_verify_clock_devices()
 	_verify_altar_save()
 	_verify_time_anchor()
@@ -287,9 +303,13 @@ func _process(_delta: float) -> bool:
 	# 同一条口径管梦泡：清单要是被清空、或那只泡从没被扫到，上面那一整段会全绿着空转。
 	if _dreams_checked < 4:
 		_fail("只核对到 %d 只梦泡（应为 4：A / S / space / D）—— 清单扫描空转了（D77）" % _dreams_checked)
-	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d covers=%d dreams=%d failures=%d"
+	# 同一条口径管遮罩：清单↔皮那几处交叉一旦没走到（清单读不到、皮没 import），
+	# 整段会全绿着空转 —— 那是最坏的一种绿。
+	if _masks_checked < 5:
+		_fail("遮罩只核了 %d 档（皮尺寸 / 剖面 / 软边 / 弧心 / 层，至少 5）—— D78 那段扫描空转了" % _masks_checked)
+	print("VERIFY DONE doors=%d pistons=%d fallzones=%d anchorables=%d covers=%d dreams=%d masks=%d failures=%d"
 		% [_doors_checked, _pistons_checked, _fallzones_checked, _anchorables_checked,
-			_covers_checked, _dreams_checked, _failures])
+			_covers_checked, _dreams_checked, _masks_checked, _failures])
 	quit(_failures > 0)
 	return false
 
@@ -1338,8 +1358,268 @@ func _verify_dream_bubbles() -> void:
 			_fail("dev_skip_dream 没绑 F9 physical_keycode：跳键找不到，打包时也就不知道该删哪条（D77）")
 
 
-## 取某个函数的体（到下一个顶层 `func ` 为止）。豁免这类判据必须钉在**那一个函数里**，
-## 全文 contains 会被别处的同名变量喂绿（`_dream != null` 在 _on_dream_completed 里也有一句）。
+## D78 开场遮罩：皮 = 清单 + 一张 PNG，行为 = `Player.wake_progress()` 的纯函数。
+## 这里核"三方对得上 + 不许有第二份数"；屏上到底长什么样归 tools/dream_mask_shot.tscn
+## （无头看不到渲染，那一份才是"皮只能看见才算数"）。
+func _verify_dream_mask() -> void:
+	var src := _code_only(FileAccess.get_file_as_string(MASK_SCRIPT))
+	if src.is_empty():
+		_fail("读不到 %s" % MASK_SCRIPT)
+		return
+	for banned in ["elapsed_world_time", "TimeReceiver", "run_state", "Engine.time_scale",
+			"anchorable", "func _process(", "signal "]:
+		if src.contains(banned):
+			_fail("DreamMask 里出现了 %s：这一拍的时基只有引擎物理步长一条、契约面只有 " % banned +
+				"`wake_progress` 一条，也不许通知任何人（D78）")
+	if not src.contains("func _physics_process("):
+		_fail("DreamMask 没有 _physics_process：取景每拍都要重算（人会动、相机会动、zoom 会变），" +
+			"摆好一次等于把它钉死在第一帧的屏幕上（D78）")
+	if not src.contains("wake_progress("):
+		_fail("DreamMask 没读 wake_progress()：那它跟的是别的进度，遮罩与苏醒窗口会各走各的（D78）")
+
+	var manifest = JSON.parse_string(FileAccess.get_file_as_string(MASK_MANIFEST))
+	if manifest == null:
+		_fail("读不到 %s —— 先跑 py tools/gen_dream_mask_preview.py（D78）" % MASK_MANIFEST)
+		return
+	for key in ["radius", "edge_width", "cap", "open_radius", "breath_amplitude", "breath_period",
+			"arc_origin_y", "corner_radius", "tex_px_per_world_px", "texture", "colour"]:
+		if not manifest.has(key):
+			_fail("遮罩清单缺键 %s：构件全靠它，源码里不许有第二份（D78）" % key)
+	# `cap` 不在这一列里：它的值就是 1.0，而源码合法地写着 `1.0 - p`。
+	var nums := _src_numbers(src)
+	for key in ["radius", "edge_width", "open_radius", "breath_amplitude", "breath_period",
+			"arc_origin_y", "corner_radius", "tex_px_per_world_px"]:
+		var v := float(manifest.get(key, 0.0))
+		if nums.has(v):
+			_fail("DreamMask 源码里有第二份 %s（=%s）：改清单改不动屏幕（D78）" % [key, str(v)])
+
+	var r_in := float(manifest.get("radius", 0.0))
+	var ramp_w := float(manifest.get("edge_width", 0.0))
+	var cap := float(manifest.get("cap", 0.0))
+	var corner := int(manifest.get("corner_radius", 0))
+	var per_world := float(manifest.get("tex_px_per_world_px", 0.0))
+	var col: Array = manifest.get("colour", [])
+	var want_full := int(round(cap * 255.0))
+	if cap <= 0.0 or cap > 1.0:
+		_fail("清单 cap=%s：外圈压暗的档位必须在 (0,1]，0 等于这一层白画（D78）" % str(cap))
+	if per_world <= 0.0:
+		_fail("清单 tex_px_per_world_px=%s：皮的烘法比例没了，屏上半径就没法换算（D78）" % str(per_world))
+
+	if not FileAccess.file_exists(MASK_PNG):
+		_fail("遮罩皮不在 %s —— 先跑 py tools/gen_dream_mask_preview.py，再 --import（D78）" % MASK_PNG)
+		return
+	var tex := load(MASK_PNG) as Texture2D
+	if tex == null:
+		_fail("遮罩皮加载失败: %s（多半是没 --import）（D78）" % MASK_PNG)
+		return
+	var img := tex.get_image()
+	img.convert(Image.FORMAT_RGBA8)
+	var side := img.get_width()
+	if img.get_height() != side:
+		_fail("遮罩皮是 %dx%d 不是正方形：张开靠整张放大，非正方会在某一边先露底（D78）"
+			% [side, img.get_height()])
+	var tex_c: Dictionary = manifest.get("texture", {})
+	if int(tex_c.get("side", -1)) != side:
+		_fail("清单 texture.side=%s 而皮是 %d 宽：两边不是同一次生成的（D78）"
+			% [str(tex_c.get("side", "<无>")), side])
+	_masks_checked += 1
+	var centre := Vector2i(side / 2, img.get_height() / 2)
+	var c_list: Array = tex_c.get("centre", [])
+	if c_list.size() == 2 and (int(c_list[0]) != centre.x or int(c_list[1]) != centre.y):
+		_fail("清单 texture.centre=%s 与皮的几何中心 (%d,%d) 不符：构件按清单那个点取景（D78）"
+			% [str(c_list), centre.x, centre.y])
+	if side / 2 < int(ceil(float(corner) * per_world)):
+		_fail("皮只有 %d 宽（半径 %d 纹理像素），装不下 corner_radius=%d 世界像素：张到最大时" % [side, side / 2, corner] +
+			"屏幕四角会先露出没遮罩的空隙（D78）")
+	# alpha 剖面：亮区不许被压、软边必须一路单调到底、外圈必须真的按 `cap` 压住。
+	# 这一条是 D78 自己踩出来的：第一版环只画到 r_out 为止，屏上是一圈黑环、远处照旧清楚。
+	var ramp_lo := -1
+	var ramp_hi := -1
+	var prev_a := -1
+	var outer_bad := false		# 外圈只报第一处：那是同一次生成出的同一个毛病，逐格刷屏没人看
+	var inner_bad := false		# 亮区同理
+	for d in range(0, corner + 3):
+		var x := centre.x + int(round(float(d) * per_world))
+		if x >= side:
+			break
+		var p := img.get_pixel(x, centre.y)
+		var a := int(round(p.a * 255.0))
+		if d <= int(r_in) - 1 and a != 0 and not inner_bad:
+			inner_bad = true
+			_fail("皮在亮区内 d=%d 处 alpha=%d（应为 0）：人的脸会被自己那层遮罩糊掉（D78）" % [d, a])
+		if d >= int(r_in) + 1 and d <= int(r_in * (1.0 + ramp_w)):
+			if ramp_lo < 0:
+				ramp_lo = d
+			ramp_hi = d
+			if prev_a > a:
+				_fail("软边在 d=%d 处回弹（%d -> %d）：环不是逐圈单调涂出来的（D78）" % [d, prev_a, a])
+			prev_a = a
+		if d > int(r_in * (1.0 + ramp_w)) + 1 and a != want_full and not outer_bad:
+			outer_bad = true
+			_fail("皮在外圈 d=%d 处 alpha=%d（清单 cap 要 %d）：遮罩外圈没压住 = 那圈还是亮的（D78）"
+				% [d, a, want_full])
+		# 透明那半边也得涂成遮罩色：LINEAR 采样跨过硬边时会把黑色混进来，屏上出现一圈灰边。
+		if col.size() == 3 and absi(int(round(p.r * 255.0)) - int(col[0])) > 2:
+			_fail("皮在 d=%d 处 RGB 是 %s，清单遮罩色是 %s：底色不是遮罩色的话，软边会被采样糊成灰圈（D78）"
+				% [d, str(p), str(col)])
+			break
+	if ramp_lo < 0:
+		_fail("皮上找不到软边（r_in=%s w=%s）：那条过渡带没画出来 = 硬边一圈，看着像贴了个洞（D78）"
+			% [str(r_in), str(ramp_w)])
+	else:
+		var lo := centre.x + int(round(float(ramp_lo) * per_world))
+		var hi := centre.x + int(round(float(ramp_hi) * per_world))
+		var rise: int = int(round(img.get_pixel(hi, centre.y).a * 255.0)) \
+			- int(round(img.get_pixel(lo, centre.y).a * 255.0))
+		if rise < 120:
+			_fail("软边从 d=%d 到 d=%d 只走了 %d/255 档：那条过渡带在屏上根本看不出来（D78）"
+				% [ramp_lo, ramp_hi, rise])
+	_masks_checked += 2
+
+	# 张到底那一拍必须真的放开整屏：屏角在 progress=1 时的压暗量要接近 0。
+	var open_r := float(manifest.get("open_radius", 0.0))
+	var corner_alpha := _smooth_alpha(float(corner), open_r, ramp_w)
+	if corner_alpha > 0.05:
+		_fail("progress=1 时屏角还压着 %.1f%%（open_radius=%s 对 corner_radius=%d）：醒完了四角还是黑的（D78）"
+			% [corner_alpha * 100.0, str(open_r), corner])
+
+	# 与梦泡同一只弧心 + 亮区必须把四只泡整个包住（不然遮罩把要教的那几只键糊掉）。
+	var dream = JSON.parse_string(FileAccess.get_file_as_string(DREAM_MANIFEST))
+	if dream == null:
+		_fail("读不到 %s：遮罩没法核对亮区包不包得住四只泡（D78）" % DREAM_MANIFEST)
+	else:
+		if float(dream.get("arc_origin_y", 0.0)) != float(manifest.get("arc_origin_y", 0.0)):
+			_fail("遮罩的弧心偏移 %s 与梦泡的 %s 不是同一个：亮区与四只泡不同心，看着像有人把泡挪歪了（D78）"
+				% [str(manifest.get("arc_origin_y", "<无>")), str(dream.get("arc_origin_y", "<无>"))])
+		var arc_r := float(dream.get("radius", 0.0))
+		var parts: Dictionary = dream.get("parts", {})
+		var far := 0.0
+		for entry in dream.get("bubbles", []):
+			var deg := float(entry.get("deg", 0.0))
+			var pos := Vector2(arc_r * cos(deg_to_rad(deg)), -arc_r * sin(deg_to_rad(deg)))
+			var size: Array = parts.get(str(entry.get("part", "")), [])
+			if size.size() != 2:
+				continue
+			var unit := pos.normalized()
+			var support := float(size[0]) * 0.5 * absf(unit.x) + float(size[1]) * 0.5 * absf(unit.y)
+			far = maxf(far, arc_r + support)
+		if r_in < far + 2.0:
+			_fail("亮区半径 %s 包不住四只泡最远的那一角（%.1f px 再加 2 余量）：遮罩会把要教的键糊掉（D78）"
+				% [str(r_in), far])
+		_masks_checked += 2
+
+	var scene = load(MASK_SCENE).instantiate()
+	# 进树才读得到 `layer`：那一档是 `_ready()` 里写的（.tscn 里没存），不进树读到的永远是默认 1，
+	# 那两条判据就成了永远不响的假绿（第一版正是这样绿过去的）。
+	root.add_child(scene)
+	if scene.get_class() != "CanvasLayer":
+		_fail("dream_mask.tscn 的根是 %s，不是 CanvasLayer：遮罩要盖住整个世界，" % scene.get_class() +
+			"用 Node2D 就得靠 z_index 跟所有层抢（D78）")
+	elif scene.layer <= 0:
+		_fail("遮罩的 layer=%d 不在世界之上：世界自己那几层会把它盖掉（D78）" % scene.layer)
+	if scene.get_child_count() != 1 or not (scene.get_node_or_null("Mask") is Sprite2D):
+		_fail("dream_mask.tscn 里那一个子节点不是叫 Mask 的 Sprite2D：构件与实拍器都按这个名字取（D78）")
+	var filter = load(FILTER_SCRIPT).instantiate()
+	if scene.layer >= filter.layer:
+		_fail("遮罩的 layer=%d 没低过冻结滤镜的 %d：滤镜吃的是屏幕，遮罩要被它一起扫进去才对（D78）"
+			% [scene.layer, filter.layer])
+	filter.free()
+	root.remove_child(scene)
+	scene.free()
+	_masks_checked += 1
+
+	var music_tscn := FileAccess.get_file_as_string("res://autoloads/Musicplayer.tscn")
+	if music_tscn.contains("autoplay = true"):
+		_fail("Musicplayer 还挂着 autoplay = true：他还没睁眼 BGM 就在放，D78 那条白做")
+	elif not music_tscn.contains("autoplay = false"):
+		_fail("Musicplayer 里找不到 autoplay = false：起播点不在代码里，谁改都改不动（D78）")
+	var base := _code_only(FileAccess.get_file_as_string(LEVEL_BASE_SCRIPT))
+	var starts := base.count("_start_music()")
+	if starts != 3:
+		_fail("LevelBase 里 `_start_music()` 出现 %d 次（定义 1 + 出口 2 = 3）：" % starts +
+			"多一处就多一个起播点，少一处就有一条路永远不响（D78）")
+	var body := _func_body(base, "func _start_music(")
+	if body.is_empty():
+		_fail("LevelBase 没有 _start_music()：BGM 的起点散在了调用点上（D78）")
+	else:
+		if not body.contains("music.get(&\"playing\")"):
+			_fail("_start_music 没先问 playing：死亡重载与按 R 会把已经在放的那首从头再来一遍（D78）")
+		if body.count("call(&\"play\")") != 1:
+			_fail("_start_music 体里 `call(&\"play\")` = %d（应为 1）（D78）" % body.count("call(&\"play\")"))
+	if base.count("call(&\"play\")") != 1:
+		_fail("LevelBase 全文有 %d 发 `call(&\"play\")`（只许 _start_music 里那一发）：" % base.count("call(&\"play\")") +
+			"BGM 的起点必须只有一个，否则「什么时候响」没人说得清（D78）")
+	var completed := _func_body(base, "func _on_dream_completed(")
+	if not completed.contains("_start_music()"):
+		_fail("_on_dream_completed 没叫 _start_music()：四只泡全破完之后音乐永远不来（D78）")
+
+
+## 源码里出现过的**数字字面量**（去注释后扫，见 `_code_only`）。
+## 为什么不用 `contains("80")`：那条既会把 `0.45` 里的 "45" 当成 45，又会把 `80.0` 这种
+## 真字面量漏掉（D78 第一版就是这么假绿过去的 —— 源码里写死 80.0，判据一声不响）。
+func _src_numbers(src: String) -> Array:
+	var out: Array = []
+	var n := src.length()
+	var i := 0
+	while i < n:
+		var ch := src.substr(i, 1)
+		var neg := false
+		if ch == "-" and i + 1 < n:
+			var prev0 := src.substr(maxi(i - 1, 0), 1)
+			var nxt := src.substr(i + 1, 1)
+			if not _ident_ch(prev0) and nxt >= "0" and nxt <= "9":
+				neg = true
+				i += 1
+				ch = src.substr(i, 1)
+		if ch >= "0" and ch <= "9":
+			var prev := src.substr(maxi(i - 1, 0), 1) if not neg else src.substr(maxi(i - 2, 0), 1)
+			if _ident_ch(prev) or prev == ".":
+				i += 1
+				continue
+			var j := i
+			while j < n:
+				var cj := src.substr(j, 1)
+				if (cj >= "0" and cj <= "9") or cj == ".":
+					j += 1
+				else:
+					break
+			var tok := src.substr(i, j - i)
+			while tok.ends_with("."):
+				tok = tok.substr(0, tok.length() - 1)
+			if tok.count(".") > 1:
+				i = j
+				continue
+			var v := tok.to_float()
+			if neg:
+				v = -v
+			if not out.has(v):
+				out.append(v)
+			i = j
+			continue
+		i += 1
+	return out
+
+
+func _ident_ch(ch: String) -> bool:
+	var code := ch.unicode_at(0)
+	return (code >= 48 and code <= 57) or (code >= 65 and code <= 90) or (code >= 97 and code <= 122) \
+		or code == 95
+
+
+## 与生成器 `ramp_alpha` 同一条算式（smoothstep）：这里复算的是**形状**，数全从清单来。
+func _smooth_alpha(d: float, r_in: float, w: float) -> float:
+	if w <= 0.0:
+		return 0.0 if d <= r_in else 1.0
+	var r_out := r_in * (1.0 + w)
+	if d <= r_in:
+		return 0.0
+	if d >= r_out:
+		return 1.0
+	var t := (d - r_in) / (r_out - r_in)
+	return t * t * (3.0 - 2.0 * t)
+
+
+## 取某个函数的体（到下一个顶层 `func ` 为止）。豁免这类判据必须钉在**那一个函数里**，## 全文 contains 会被别处的同名变量喂绿（`_dream != null` 在 _on_dream_completed 里也有一句）。
 func _func_body(src: String, signature: String) -> String:
 	var at := src.find(signature)
 	if at < 0:
@@ -2193,3 +2473,4 @@ func _fold_rel_path(node_path: String, rel: NodePath) -> String:
 		return "/".join(steps)
 	base.append_array(steps)
 	return "/".join(base)
+

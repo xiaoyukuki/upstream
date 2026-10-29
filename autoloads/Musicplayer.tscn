@@ -4,4 +4,4 @@
 
 [node name="Musicplayer" type="AudioStreamPlayer" unique_id=2095757027]
 stream = ExtResource("1_chd06")
-autoplay = true
+autoplay = false

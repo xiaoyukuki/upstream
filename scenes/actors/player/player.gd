@@ -294,6 +294,18 @@ func is_waking() -> bool:
 	return _wake_remaining > 0.0
 
 
+## 苏醒那一拍走到第几成（D78 开场遮罩读它）。与 `grant_progress()` 同一形状：
+## 不在窗口里给 −1（不是 0 —— 0 是"刚开始"，那是两件不同的事），钉住期间给 0。
+## 遮罩要的是"进度"而不是"结束那一发"，所以这里刻意**不发信号**（D62 口径：
+## 不给唯一事实另发一条通道），它每拍自己读。
+func wake_progress() -> float:
+	if _wake_remaining == INF:
+		return 0.0
+	if _wake_remaining <= 0.0:
+		return -1.0
+	return clampf(1.0 - _wake_remaining / WAKE_SECONDS, 0.0, 1.0)
+
+
 ## 能力获取那一拍（D61）：踩上祭坛那一帧由 `AbilityAltar` 叫一次，时长就是它那个 `grant_time`
 ## （时长只住一处，与 `die()` 同一口径）。整段掐输入走的还是 D41 那把移动锁；除此之外这一拍
 ## 还自己管三件事：把人举起来（曲线见 `GRANT_LIFT`）、在爆发那一帧把世界钉住约 1.25 s（A3）、

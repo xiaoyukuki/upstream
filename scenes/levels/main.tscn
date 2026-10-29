@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/time_freeze_filter.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/debug_overlay.tscn" id="3"]
 [ext_resource type="PackedScene" uid="uid://dnputv4h3w5ih" path="res://scenes/levels/level_1/level1.tscn" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/ui/dream_mask/dream_mask.tscn" id="5"]
 
 [node name="Main" type="Node" unique_id=1311503015]
 script = ExtResource("1")
@@ -12,5 +13,7 @@ level_scene = ExtResource("4")
 [node name="LevelContainer" type="Node2D" parent="." unique_id=576992852]
 
 [node name="TimeFreezeFilter" parent="." unique_id=1077399270 instance=ExtResource("2")]
+
+[node name="DreamMask" parent="." instance=ExtResource("5")]
 
 [node name="DebugOverlay" parent="." unique_id=1719416871 instance=ExtResource("3")]
