@@ -112,10 +112,12 @@ width = 46.955
 altar_height = 37.92
 
 [node name="EcgMonitor" parent="Objects_Level1" unique_id=626980520 instance=ExtResource("3_kn45f")]
+z_index = -1
 position = Vector2(-1622, 278)
 beat_period = 0.4
 
 [node name="EcgMonitor2" parent="Objects_Level1" unique_id=1069139699 instance=ExtResource("3_kn45f")]
+z_index = -1
 position = Vector2(-214, -16)
 beat_period = 0.4
 
@@ -172,6 +174,7 @@ height = 103.13
 trigger = NodePath("../ButtonPlate")
 
 [node name="ButtonPlate" parent="Objects_Level1/Keys and Doors" unique_id=1018776279 instance=ExtResource("7_jprdt")]
+z_index = -1
 position = Vector2(263, 5)
 width = 64.0
 
@@ -286,16 +289,19 @@ retract_speed = 120.0
 triggers = Array[NodePath]([NodePath("../ButtonPlate2")])
 
 [node name="ButtonPlate3" parent="Objects_Level1/PistonBlock" unique_id=738950234 instance=ExtResource("7_jprdt")]
+z_index = -1
 position = Vector2(-1296, 358)
 width = 32.0
 sensor_height = 12.0
 press_depth = 4.0
 
 [node name="ButtonPlate2" parent="Objects_Level1/PistonBlock" unique_id=1585740013 instance=ExtResource("7_jprdt")]
+z_index = -1
 position = Vector2(-488, 626)
 width = 64.0
 
 [node name="ButtonPlate4" parent="Objects_Level1/PistonBlock" unique_id=1995099912 instance=ExtResource("7_jprdt")]
+z_index = -1
 position = Vector2(-1633, 340)
 width = 32.0
 sensor_height = 12.0
@@ -310,6 +316,7 @@ rest_out = true
 triggers = Array[NodePath]([NodePath("../ButtonPlate5")])
 
 [node name="ButtonPlate5" parent="Objects_Level1/PistonBlock" unique_id=615792376 instance=ExtResource("7_jprdt")]
+z_index = -1
 position = Vector2(1144, 483)
 
 [node name="Objects_Level2" type="Node2D" parent="." unique_id=1299938029]
